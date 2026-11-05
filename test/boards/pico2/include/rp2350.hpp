@@ -77,6 +77,13 @@ namespace rp2350
       }
   }
 
+  // This core's index, 0 or 1 (SIO CPUID; the same as mhartid here).
+  inline unsigned
+  cpu_id (void)
+  {
+    return static_cast<unsigned> (reg (SIO_CPUID));
+  }
+
   // h3.unblock (pico-sdk hardware/hazard3/instructions.h): wake the other
   // core from h3.block -- the RISC-V counterpart of Arm's SEV.
   inline void

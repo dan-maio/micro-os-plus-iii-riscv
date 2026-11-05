@@ -5,9 +5,13 @@
  * harts may print: a write holds SIO hardware spinlock 1 with this hart's
  * interrupts masked (the Cortex-M board did the same with PRIMASK).
  *
- * Under HW_BUILD + SEMIHOST the console is copied to semihosting too, from
- * threads only -- each semihosting call halts the hart for a JTAG round trip
- * (see the Milk-V Duo board's uart.cpp).
+ * Under HW_BUILD + SEMIHOST only the VERDICT reaches semihosting: a console
+ * write containing "RESULT:" is copied there (from threads only), the rest
+ * stays on the UART. Measured: with every line copied, OpenOCD + the Debug
+ * Probe (firmware 2.0.1) stopped servicing semihosting in long runs -- the
+ * CMSIS-RTOS validator stalled at its 44th write with core 0 halted on a
+ * valid SYS_WRITE0, smp-mat-test lost the debug module after ~114 lines.
+ * The trap report goes to semihosting directly (src/trap.cpp).
  *
  * Copyright (c) 2026 Dan. MIT license.
  */
@@ -67,10 +71,30 @@ namespace
   }
 
 #if defined(HW_BUILD) && defined(SEMIHOST)
+  bool
+  has_verdict (const char* s, std::size_t n)
+  {
+    static constexpr char key[] = "RESULT:";
+    constexpr std::size_t k = sizeof (key) - 1;
+    for (std::size_t i = 0; i + k <= n; ++i)
+      {
+        std::size_t j = 0;
+        while (j < k && s[i + j] == key[j])
+          {
+            ++j;
+          }
+        if (j == k)
+          {
+            return true;
+          }
+      }
+    return false;
+  }
+
   void
   semi_copy (const char* s, std::size_t n)
   {
-    if (!semihosting::attached () || riscv::in_trap ())
+    if (!semihosting::attached () || riscv::in_trap () || !has_verdict (s, n))
       {
         return;
       }
@@ -90,9 +114,12 @@ namespace
 #endif
 } // namespace
 
+// The uart:: functions are WEAK: a test that brings its own driver
+// (smp-test5: interrupt-driven TX) replaces them, as the Cortex-M Pico 2
+// board leaves its shared driver out of that test.
 namespace uart
 {
-  void
+  void __attribute__ ((weak))
   init (std::uint32_t baud)
   {
     rp2350::unreset_block (RESET_UART0 | RESET_IO_BANK0 | RESET_PADS_BANK0);
@@ -128,7 +155,7 @@ namespace uart
     reg (u + CR) = (1u << 9) | (1u << 8) | (1u << 0); // RXE | TXE | UARTEN
   }
 
-  void
+  void __attribute__ ((weak))
   put_char (char c)
   {
     const riscv::reg_t s = lock ();
@@ -136,7 +163,7 @@ namespace uart
     unlock (s);
   }
 
-  void
+  void __attribute__ ((weak))
   write (const char* s)
   {
     std::size_t n = 0;
@@ -147,7 +174,7 @@ namespace uart
     write (s, n);
   }
 
-  void
+  void __attribute__ ((weak))
   write (const char* s, std::size_t n)
   {
     const riscv::reg_t st = lock ();

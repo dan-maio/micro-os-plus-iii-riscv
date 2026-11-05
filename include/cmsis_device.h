@@ -27,15 +27,18 @@ NVIC_SystemReset (void)
 #define __NOP() __asm__ volatile("nop")
 #define __BKPT(n) __asm__ volatile("ebreak")
 
-// Software interrupt lines 0..31 on the machine software interrupt
-// (src/soft-irq.cpp): what Cortex-M code calls the NVIC. A user of a line
-// defines riscv_soft_irq_handler (unsigned line).
+// What Cortex-M code calls the NVIC. By default: software interrupt lines
+// 0..31 on the machine software interrupt (src/soft-irq.cpp; a user of a
+// line defines riscv_soft_irq_handler (unsigned line)). A board with an
+// external interrupt controller overrides them on its own IRQ numbers (the
+// Pico 2: Xh3irq, RP2350 IRQs, board header rp2350-irq.h).
 typedef int IRQn_Type;
 
 void NVIC_EnableIRQ (IRQn_Type irq);
 void NVIC_DisableIRQ (IRQn_Type irq);
 void NVIC_SetPendingIRQ (IRQn_Type irq);
 void NVIC_ClearPendingIRQ (IRQn_Type irq);
+void NVIC_SetPriority (IRQn_Type irq, uint32_t priority);
 
 extern uint32_t SystemCoreClock;
 static inline void

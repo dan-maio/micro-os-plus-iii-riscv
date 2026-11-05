@@ -121,8 +121,38 @@ namespace
     raw (" sp=");
     raw_hex (reinterpret_cast<std::uint64_t> (frame) + ctx_size_bytes);
     raw ("\r\nRESULT: FAIL (trap)\r\n");
-    // The verdict on the semihosting channel, then SYS_EXIT stops the run
-    // (without a debugger, exit_failure() spins).
+    // The same facts on the semihosting channel, so the runner's log says
+    // which trap it was (the console is the board's UART); then the verdict,
+    // then SYS_EXIT stops the run (without a debugger, exit_failure() spins).
+    {
+      char b[160];
+      std::size_t n = 0;
+      auto put = [&] (const char* t) {
+        while (*t != '\0' && n < sizeof (b) - 1)
+          {
+            b[n++] = *t++;
+          }
+      };
+      auto hex = [&] (std::uint64_t v) {
+        put ("0x");
+        for (int i = 0; i < 16 && n < sizeof (b) - 1; ++i)
+          {
+            const unsigned d = static_cast<unsigned> ((v >> (60 - 4 * i)) & 0xF);
+            b[n++] = static_cast<char> (d < 10 ? '0' + d : 'a' + d - 10);
+          }
+      };
+      put ("!!! RISC-V trap: mcause=");
+      hex (mcause);
+      put (" mepc=");
+      hex (frame->x[0]);
+      put (" mtval=");
+      hex (RISCV_CSR_READ (mtval));
+      put (" ra=");
+      hex (frame->x[CTX_RA]);
+      put ("\n");
+      b[n] = '\0';
+      semihosting::write_str (b);
+    }
     semihosting::write_str ("RESULT: FAIL (trap)\n");
     semihosting::exit_failure ();
   }

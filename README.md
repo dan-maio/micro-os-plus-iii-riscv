@@ -197,6 +197,10 @@ built for (`riscv_secondary_boot`'s size), one for a single-hart image.
 | console | UART0 PL011, GPIO0 TX / GPIO1 RX (the Debug Probe's UART), 115200; shared by both harts under SIO spinlock 1 with MIE masked; copied to semihosting from threads |
 | LED | GPIO25 |
 | core 1 | `src/multicore.cpp`: the boot ROM FIFO handshake `{0, 0, 1, mtvec, sp, entry}` (pico-sdk `multicore_launch_core1_raw`, `h3.unblock` for SEV) into `src/secondary.S` (loads gp and mtvec -- the ROM does not set gp), then the caller's entry. **No PSM reset of core 1**: measured, forcing it off/on under the debugger gives `[rp2350.rv1] Hart unexpectedly reset!` and no handshake; after a chip reset it already waits in the ROM (as the pico-sdk assumes) |
+| interrupts | Hazard3 Xh3irq as the NVIC (`src/irq.cpp`, `include/rp2350-irq.h`, generated from the pico-sdk's `intctrl.h`): `NVIC_Enable/DisableIRQ` = `meiea` (per core) + `mie.MEIE`, `NVIC_Set/ClearPendingIRQ` = `meifa` (forced pending; a `meinext` read that returns the IRQ clears it), `NVIC_SetPriority(n, p)` = `meipra` 15 - p; the trap's external interrupt loops on `meinext` and calls `<NAME>_Handler` (the Cortex-M vector names, weak; an unhandled IRQ is disabled). The port's soft-IRQ `NVIC_*` are weak and stay the Duo's |
+| console to semihosting | **verdict lines only** (a write containing `RESULT:`); the rest is UART only. Measured: with every line copied, OpenOCD + the Debug Probe (fw 2.0.1) stopped servicing semihosting in long runs (validator: core 0 halted on a valid `SYS_WRITE0` after 43; smp-mat-test lost the debug module after ~114). The trap report also goes to semihosting (mcause, mepc, mtval, ra) |
+| `mtval` | Hazard3 hardwires it to 0 (datasheet): code that needs a fault address decodes the instruction (the validator's DWT emulation does) |
+| harness | kernel platform `riscv-pico2` (`xpm run ... --config riscv-pico2-cmake-gcc-{debug,release}`); `test/pico2/include/cmsis-plus/os-app-config.h` caps rtos-apis's RTOS arena at 96 KiB on hardware and leaves FatFs out (the free store is 468992 bytes; 512 KiB threw bad_alloc), as the Cortex-M Pico 2 board does |
 | `hw.sh` | Raspberry Pi OpenOCD (`~/.pico-sdk/openocd/*`, also looked up on the mounted home), probe pinned by VID:PID **2e8a:000c** (with the Duo's Sipeed probe also plugged in, OpenOCD took that one first); `init; reset init; program <elf> verify; reset init; arm semihosting enable` (both harts)`; resume`; verdict = RESULT line + OpenOCD's exit status (SYS_EXIT) |
 
 ## Milk-V Duo facts (from the duo-buildroot-sdk)
@@ -337,22 +341,27 @@ twice in a row** -- worker 0 on core 0 and worker 1 on core 1, 20 rounds
 each, 40 handoffs, exit 0. A worker's lines are ~650 ms apart in RTOS time on
 the board against 500 ms on QEMU (cause not measured yet).
 
-Phase 4 (porting the Cortex-M Pico 2 tests to the Hazard3 board), first batch,
-on the Pico 2 (Raspberry Pi Debug Probe, `test/boards/pico2/hw.sh`):
+Phase 4 (porting the Cortex-M Pico 2 tests to the Hazard3 board), on the
+Pico 2 (Raspberry Pi Debug Probe), one run after the semihosting change:
 
-| test | cores | result |
-|---|---|---|
-| sc-test-ko | 1 | **PASS** (10/10 kernel objects) |
-| smp-test1 | 1 | **PASS** |
-| smp-test2 | 2 | **PASS** (40 handoffs, worker 1 on core 1) |
-| smp-test3 | 2 | **PASS** (cross-core IPI wake-ups, TIMER0 latency) |
-| smp-test4 | 2 | **PASS** (kernel objects under dual-core contention) |
-| smp-test-ko | 2 | **PASS** (10/10) |
-| smp-mat-test | 2 | **PASS**: 120x120 system, parallel block vs classical elimination identical (max diff 0), 1.373x on 2 cores (soft-float) |
+| test | cores | Pico 2 | QEMU |
+|---|---|---|---|
+| sc-test-ko | 1 | **PASS** | PASS |
+| smp-test1 | 1 | **PASS** | PASS |
+| smp-test2 | 2 | **PASS** | PASS |
+| smp-test3 | 2 | **PASS** | hw only |
+| smp-test4 | 2 | **PASS** | hw only |
+| smp-test5 | 2 | **PASS** -- UART0 IRQ 33 on core 1 through Xh3irq, 48848 bytes, 0 dropped | hw only |
+| smp-test-ko | 2 | **PASS** | hw only |
+| smp-mat-test | 2 | **PASS** -- 120x120, block == classical, 1.373x on 2 cores | hw only |
+| exc-test (the RISC-V one) | 1 | **PASS** | PASS |
+| fp-switch (harness) | 1 | **PASS** | PASS |
+| mutex-stress (harness) | 1 | **PASS** | PASS |
+| rtos-apis (harness) | 1 | **PASS** (96 KiB arena, no FatFs) | PASS |
+| cmsis-os-validator (harness) | 1 | **PASS** | PASS |
 
-QEMU (`qemu-system-riscv32`, 1 or 2 harts): sc-test-ko, smp-test1, smp-test2
-pass; smp-test3/4, smp-test-ko, smp-mat-test program RP2350 peripherals
-(TIMER0, SIO) and are hardware only, as on the Cortex-M board.
+13/13 on the board. Still to port: smp-test0 (bare, needs a kernel-less
+runtime in the port), the `-ram` variants, the two USB tests.
 
 Porting changes: `bsp/` headers -> the board's; Arm idle `dsb`/`wfi` -> yield
 only; `dmb`/`__DMB` -> `fence rw, rw`; smp-mat-test's configuration-error
@@ -362,7 +371,10 @@ semihosting round trip per call and once ended with the debug module lost
 after line 114 (`halted due to undefined`, `dmcontrol=0x0`; not explained
 yet). `hw.sh`'s stale-image check was narrowed (both boards) to the port,
 the board and the test's own sources: another test's edit made every image
-look stale.
+look stale. Its limit, measured: a NEW header that shadows an old one (the
+board's os-app-config.h) changes no recorded dependency, so ninja does not
+rebuild and the check passes on a stale image -- clean the target
+(`ninja -t clean <app>-hwd`) after adding such a header.
 
 Found on the way, in the runner: `qemu.sh` ran under `pipefail` and tested the
 image with `nm ... | grep -q`. `grep -q` exits at the first match, `nm` then

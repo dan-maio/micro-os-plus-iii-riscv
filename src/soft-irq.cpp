@@ -9,6 +9,10 @@
  * ISR-safe calls behave as they do in any interrupt -- and on the way out
  * switches threads, if a handler made one due.
  *
+ * These NVIC_* are WEAK: a board with a real external interrupt controller
+ * (the RP2350's Hazard3 Xh3irq, test/boards/pico2/src/irq.cpp) supplies
+ * strong ones on its own IRQ numbers instead.
+ *
  * The NVIC names are what Cortex-M code calls (the CMSIS-RTOS validator
  * raises "IRQ 0" this way, cmsis_device.h declares them). A user of a line
  * defines riscv_soft_irq_handler(); the validator's board glue does
@@ -52,20 +56,20 @@ namespace
 // it empties the mail queue, and the previous case's periodic timer may have
 // raised the line after that case disabled it. Delivering the stale request
 // at enable ran the new case's ISR on the old case's mail.
-void
+void __attribute__ ((weak))
 NVIC_EnableIRQ (IRQn_Type n)
 {
   __atomic_fetch_and (&riscv_soft_irq_pending, ~bit (n), __ATOMIC_SEQ_CST);
   __atomic_fetch_or (&riscv_soft_irq_enabled, bit (n), __ATOMIC_SEQ_CST);
 }
 
-void
+void __attribute__ ((weak))
 NVIC_DisableIRQ (IRQn_Type n)
 {
   __atomic_fetch_and (&riscv_soft_irq_enabled, ~bit (n), __ATOMIC_SEQ_CST);
 }
 
-void
+void __attribute__ ((weak))
 NVIC_SetPendingIRQ (IRQn_Type n)
 {
   __atomic_fetch_or (&riscv_soft_irq_pending, bit (n), __ATOMIC_SEQ_CST);
@@ -90,7 +94,7 @@ NVIC_SetPendingIRQ (IRQn_Type n)
     }
 }
 
-void
+void __attribute__ ((weak))
 NVIC_ClearPendingIRQ (IRQn_Type n)
 {
   __atomic_fetch_and (&riscv_soft_irq_pending, ~bit (n), __ATOMIC_SEQ_CST);
@@ -112,4 +116,13 @@ riscv_soft_irq_dispatch (void)
                           __ATOMIC_SEQ_CST);
       riscv_soft_irq_handler (line);
     }
+}
+
+// Priorities do not exist on the software lines (all equal, served in line
+// order). A board with a real interrupt controller replaces this.
+void __attribute__ ((weak))
+NVIC_SetPriority (IRQn_Type n, std::uint32_t priority)
+{
+  (void) n;
+  (void) priority;
 }
