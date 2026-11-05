@@ -108,7 +108,9 @@ set (_uos_riscv_port_sources
   "${CMAKE_CURRENT_SOURCE_DIR}/src/startup.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/trace.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/syscalls.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/syscalls-time.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/mmu.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/soft-irq.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/semihosting-exit.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/rtos/os-core.cpp"
 )

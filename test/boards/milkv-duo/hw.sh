@@ -17,10 +17,14 @@
 #   arm semihosting enable     the test's output and its SYS_EXIT verdict
 #   resume <_start>
 #
-# There is no reset line on the header: one test per power cycle.
+# There is no reset line on the header. Each test restarts the hart at
+# _start, which re-initialises everything a previous test touched, so tests
+# can run back to back (hw-all.sh); power-cycle only if one wedges the hart.
 #
 # Wiring: TDI pin 1, TDO pin 2, TMS pin 16, TCK pin 17, GND pin 18 (JTAG);
 #         UART4 TX pin 4, RX pin 5 (115200 8N1) for the console.
+#
+# Exit: 0 PASS, 1 FAIL, 2 no such test, 3 TIMEOUT, 4 OPENOCD DIED.
 #
 # Env:  BUILD=<dir>      the CMake build directory  (default: test/build)
 #       OPENOCD=<path>   a specific OpenOCD (one that drives the C906)
@@ -104,6 +108,8 @@ case "$rc" in
   0) echo "PASS  (${waited}s)" ;;
   1) echo "FAIL  (see $LOG)" ;;
   4) echo "OPENOCD DIED  (see $LOG)" ;;
-  *) echo "TIMEOUT after ${SECS}s  (see $LOG)" ;;
+  *) echo "TIMEOUT after ${SECS}s  (see $LOG)" ; rc=3 ;;
 esac
-[[ "$rc" -eq 0 ]]
+# 0 PASS, 1 FAIL, 2 no such test, 3 TIMEOUT, 4 OPENOCD DIED (hw-all.sh tells
+# them apart; CTest only needs zero / non-zero).
+exit "$rc"

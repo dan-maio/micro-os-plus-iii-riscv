@@ -27,6 +27,16 @@ NVIC_SystemReset (void)
 #define __NOP() __asm__ volatile("nop")
 #define __BKPT(n) __asm__ volatile("ebreak")
 
+// Software interrupt lines 0..31 on the machine software interrupt
+// (src/soft-irq.cpp): what Cortex-M code calls the NVIC. A user of a line
+// defines riscv_soft_irq_handler (unsigned line).
+typedef int IRQn_Type;
+
+void NVIC_EnableIRQ (IRQn_Type irq);
+void NVIC_DisableIRQ (IRQn_Type irq);
+void NVIC_SetPendingIRQ (IRQn_Type irq);
+void NVIC_ClearPendingIRQ (IRQn_Type irq);
+
 extern uint32_t SystemCoreClock;
 static inline void
 SystemCoreClockUpdate (void)

@@ -31,6 +31,9 @@ extern "C"
   // Defined in os-core.cpp: re-arm mtimecmp for the next tick.
   void riscv_port_tick_rearm (void);
 
+  // soft-irq.cpp: run the pending, enabled software interrupt lines.
+  void riscv_soft_irq_dispatch (void);
+
   void __attribute__ ((weak)) riscv_board_external_interrupt (void)
   {
   }
@@ -127,8 +130,18 @@ riscv_trap_dispatch (ctx_t* frame)
       switch (mcause & 0xFFF)
         {
         case riscv::csr::IRQ_M_SOFT:
-          return os::rtos::port::scheduler::switch_stacks (
-              reinterpret_cast<os::rtos::port::stack::element_t*> (frame));
+          // MSIP carries two requests: software interrupt lines
+          // (soft-irq.cpp) and the context switch. Run the lines first, in
+          // handler mode; they may make a thread ready. Then switch, but
+          // only if a reschedule is pending.
+          clint::msip_clear ();
+          riscv_soft_irq_dispatch ();
+          if (os::rtos::scheduler::is_reschedule_pending)
+            {
+              return os::rtos::port::scheduler::switch_stacks (
+                  reinterpret_cast<os::rtos::port::stack::element_t*> (frame));
+            }
+          return frame;
 
         case riscv::csr::IRQ_M_TIMER:
           riscv_port_tick_rearm ();
