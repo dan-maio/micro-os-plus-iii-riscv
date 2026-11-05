@@ -97,7 +97,14 @@ namespace os
           constexpr state_t init = unlocked;
         } /* namespace state */
 
+#if defined(OS_USE_SMP_SCHEDULER)
+        // Per hart: the scheduler lock is per CPU, like current_thread_[].
+        extern volatile state_t lock_state[OS_NCPU];
+        // The kernel spinlock (os-core.cpp).
+        extern os_port_smp_klock_t smp_klock;
+#else
         extern state_t lock_state;
+#endif
       } /* namespace scheduler */
 
       using thread_context_t = struct context_s

@@ -22,12 +22,12 @@
 #include <clint.hpp>
 #include <cmsis_device.h>
 #include <riscv-csr.hpp>
+#include <riscv-hart.hpp>
 
 extern "C"
 {
   volatile std::uint32_t riscv_soft_irq_enabled = 0;
   volatile std::uint32_t riscv_soft_irq_pending = 0;
-  extern volatile std::uint32_t riscv_trap_nesting; // trap.S
 
   void __attribute__ ((weak)) riscv_soft_irq_handler (unsigned line)
   {
@@ -78,8 +78,7 @@ NVIC_SetPendingIRQ (IRQn_Type n)
       // later, so from a thread with interrupts enabled wait for the
       // dispatcher to have taken the line. (Masked or in a handler: it runs
       // when interrupts are unmasked / the trap returns, as on Cortex-M.)
-      if (riscv_trap_nesting == 0
-          && (RISCV_CSR_READ (mstatus) & riscv::csr::MSTATUS_MIE) != 0)
+      if ((RISCV_CSR_READ (mstatus) & riscv::csr::MSTATUS_MIE) != 0)
         {
           (void) clint::msip_read ();
           while ((__atomic_load_n (&riscv_soft_irq_pending, __ATOMIC_ACQUIRE)

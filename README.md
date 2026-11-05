@@ -1,7 +1,7 @@
 # micro-os-plus-iii-riscv
 
 The **RISC-V port of µOS++ III**: RV64 or RV32, with or without an FPU,
-machine mode, one hart (SMP in progress). The fourth
+machine mode, one hart or SMP (`OS_NCPU` harts). The fourth
 architecture project beside `micro-os-plus-iii-cortexm`, `-aarch32` and
 `-aarch64`, built and tested the same way.
 
@@ -146,6 +146,44 @@ CTest's `SKIP_RETURN_CODE`).
 | cores | both examined: XLEN=32, `misa=0x40901105`; core 1 waits in the boot ROM (pc `0x76de`) until launched |
 | semihosting | works; `SYS_EXIT` (32-bit form) ends OpenOCD with exit status 0, as on the Duo |
 | probe | Debugprobe firmware 2.0.1: OpenOCD warns it is old and uses a slower workaround |
+| time | Hazard3 does **not** implement the `time`/`timeh` CSRs (datasheet, RVCSR `MCOUNTEREN.TM`): the clock is the SIO platform timer `MTIME`/`MTIMEH` (`0xd00001b0`), one counter shared by both cores; `MTIMECMP`/`MTIMECMPH` (`0xd00001b8`) are per core at the same address |
+| soft IRQ | SIO `RISCV_SOFTIRQ` (`0xd00001a0`): bit h sets core h's MSIP, bit 8+h clears it (not a CLINT word per hart) |
+
+## SMP (OS_NCPU > 1)
+
+The kernel's SMP contract (`OS_USE_SMP_SCHEDULER`, defined by `uos_add_app`
+when NCPU > 1) and how the RISC-V port meets it -- the same model as the
+RP2350 Cortex-M port, on RISC-V mechanisms:
+
+| | RP2350 Cortex-M port | RISC-V port |
+|---|---|---|
+| CPU id (`port_cpu_id()`) | `SIO_CPUID` | `mhartid` (`riscv::this_hart()`) |
+| kernel lock | recursive spinlock on SIO hardware spinlock 0 | recursive spinlock on an AMO (`amoswap.w.aq` / store-release), owner + depth |
+| critical section | PRIMASK + kernel lock | `mstatus.MIE` + kernel lock |
+| scheduler lock | per core, holds the kernel lock with IRQs masked | the same, per hart |
+| switch | PendSV per core | `ecall` per hart (as single-hart) |
+| frame publish | `stack_ptr` published at once, incoming claimed (`nullptr`) | the same: trap.S saves the frame on the thread's stack, the dispatcher runs on the hart's own interrupt stack |
+| IPI (`port_smp_ipi()`, `OS_SMP_IPI_SGI`) | SIO FIFO IRQ | the target hart's machine software interrupt (mcause 3) |
+| tick | per-core SysTick; core 0 advances the clock | per-hart `mtimecmp`; hart 0 calls `os_systick_handler()`, the others only reschedule |
+| secondary start | boot-ROM FIFO handshake | QEMU virt: every hart enters `_start`, harts > 0 wait in `riscv_secondary_park` for their slot `{magic, entry, sp}`; RP2350: the boot ROM FIFO (board) |
+| per-core data | `lock_state[]`, core-1 MSP stack | `lock_state[]`, `riscv_trap_nesting[]`, `riscv_port_pending[]`, `riscv_port_yield_deferred[]`, `riscv_irq_stack_top[]` |
+
+"Inside a trap" is read safely on SMP: a trap always runs with MIE clear, so
+with MIE set it is thread code, and with MIE clear the thread cannot move to
+another hart while it reads its hart's nesting count.
+
+Tests launch the second hart the way the Cortex-M Pico 2 tests do, with the
+same names (`include/riscv-smp.hpp`): register `idle1` in
+`os_idle_thread_core[1]`, then
+`multicore::launch_core1 (port_smp_secondary_start, port_core1_stack_top ())`.
+
+`riscv_sw_log[256]` records the first 256 switches (hart, outgoing and
+incoming thread, outgoing state), for a debugger.
+
+A board without a hardware linker script builds only `qemu` images
+(`UOS_BOARD_LINKER_HW ""`); `board_test_qemu_ncpu()` lets an SMP board's QEMU
+images keep their hart count; `qemu.sh` starts as many harts as the image was
+built for (`riscv_secondary_boot`'s size), one for a single-hart image.
 
 ## Milk-V Duo facts (from the duo-buildroot-sdk)
 
@@ -274,6 +312,17 @@ separate, non-coherent core); `sd_test`, `usb_*` -- no SD/USB drivers yet.
 RV32 (phase 1 of the Pico 2 port): the Duo's tests built for the RV32 stand-in
 (`test/build-rv32`): **7 passed, mmu-test skipped** (no MMU on RV32). RV64
 unchanged: port 8/8, harness 14/14.
+
+SMP (phase 2): board `pico2` (emulated only so far), `smp-test2` ported from
+the Cortex-M Pico 2 test, on `qemu-system-riscv32 -smp 2`: **PASS 8/8**
+(both workers, 40 handoffs, worker 1 on hart 1). Single-hart builds
+unchanged (RV64 8/8, RV32 7 + skip, harness 14/14).
+
+Found on the way, in the runner: `qemu.sh` ran under `pipefail` and tested the
+image with `nm ... | grep -q`. `grep -q` exits at the first match, `nm` then
+dies of SIGPIPE, and the test reads false -- intermittently. SMP images were
+started with `-smp 1` in 3 runs of 5 and hart 1 never existed. The pipes now
+read to the end.
 
 Kernel harness, QEMU virt (`xpm run test --config ...`):
 

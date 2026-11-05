@@ -26,6 +26,7 @@ SECS="${SECS:-120}"
 QBIN="$(ls -d "$HOME"/.local/xPacks/@xpack-dev-tools/qemu-riscv/*/.content/bin 2>/dev/null | sort -V | tail -1)"
 READELF="$(ls -d "$HOME"/.local/xPacks/@xpack-dev-tools/riscv-none-elf-gcc/*/.content/bin/riscv-none-elf-readelf 2>/dev/null | sort -V | tail -1)"
 READELF="${READELF:-riscv-none-elf-readelf}"
+NM="${READELF%readelf}nm"
 
 LOGS="$BUILD/.qemu-logs"; mkdir -p "$LOGS"
 
@@ -39,18 +40,34 @@ run_one () {
     return 2
   fi
   local log="$LOGS/${app}.log"
-  echo "== QEMU virt (milkv-duo tests) : $app =="
+  echo "== QEMU virt (${BOARD:-milkv-duo} tests) : $app =="
   # The image says which hart it is for: ELF32 -> an RV32 hart without an
   # FPU and with the Hazard3 extensions; ELF64 -> RV64GC.
   local q cpu
-  if "$READELF" -h "$elf" | grep -q 'Class:.*ELF32'; then
+  if "$READELF" -h "$elf" | grep 'Class:.*ELF32' > /dev/null; then
     q="${QEMU:-${QBIN:+$QBIN/}qemu-system-riscv32}"
     cpu="rv32,f=false,d=false,zfa=false,zba=true,zbb=true,zbs=true,zbkb=true,zcb=true,zcmp=true"
   else
     q="${QEMU:-${QBIN:+$QBIN/}qemu-system-riscv64}"
     cpu="rv64"
   fi
-  timeout "$SECS" "$q" -M virt -cpu "$cpu" -smp 1 -m 128M -nographic \
+  # An SMP image (it carries the secondary-hart park, startup.S) runs on as
+  # many harts as it was built for (riscv_secondary_boot is 3 XLEN words
+  # per hart); any other image on one -- with more, its other harts would
+  # run the start-up too.
+  # (No `grep -q` on these pipes: with pipefail, grep -q exiting at the first
+  # match kills the producer with SIGPIPE and the test reads as false --
+  # intermittently, depending on whether nm had finished. Measured: SMP
+  # images were started with -smp 1 in 3 runs of 5.)
+  local smp=1
+  if "$NM" "$elf" 2>/dev/null | grep ' riscv_secondary_park$' > /dev/null; then
+    local words sz
+    sz="$("$NM" -S "$elf" | awk '$4 == "riscv_secondary_boot" { print $2 }')"
+    if "$READELF" -h "$elf" | grep 'Class:.*ELF32' > /dev/null; then words=12; else words=24; fi
+    smp=$(( 16#${sz:-0} / words ))
+    (( smp >= 1 )) || smp=2
+  fi
+  timeout "$SECS" "$q" -M virt -cpu "$cpu" -smp "$smp" -m 128M -nographic \
     -bios none -kernel "$elf" \
     -semihosting-config enable=on,target=native \
     -monitor none -serial stdio 2>&1 | tee "$log"

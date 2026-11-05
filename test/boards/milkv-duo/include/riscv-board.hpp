@@ -32,10 +32,17 @@ namespace riscv_board
   inline constexpr std::uintptr_t CLINT_MSIP = CLINT_BASE + 0x0000u;
   inline constexpr std::uintptr_t CLINT_MTIMECMP = CLINT_BASE + 0x4000u;
   inline constexpr std::uintptr_t CLINT_MTIME = CLINT_BASE + 0xBFF8u;
+  // Per-hart register strides (a standard CLINT).
+  inline constexpr std::uintptr_t CLINT_MTIMECMP_STRIDE = 8u;
+  inline constexpr std::uintptr_t CLINT_MSIP_STRIDE = 4u;
   // clint,has-no-64bit-mmio
   inline constexpr bool MTIMECMP_SPLIT32 = true;
   // mtime is not implemented on the C906: reading it faults (see above).
   inline constexpr bool MTIME_READABLE = false;
+
+  // The port's clock source: the time CSR (rdtime) where the hart has it,
+  // else the platform timer's MMIO mtime. Here: the C906 implements the time CSR (its CLINT mtime is not readable).
+  inline constexpr bool TIME_CSR = true;
 
   inline constexpr std::uint32_t TIMEBASE_HZ = 25000000u;
 

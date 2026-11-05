@@ -43,6 +43,9 @@
 // The frame keeps the stack 16-byte aligned (psABI, RV32 and RV64).
 #define PORT_CTX_SIZE ((PORT_CTX_END + 15) / 16 * 16)
 
+// The "go" word of a secondary hart's release slot (startup.S).
+#define RISCV_SECONDARY_MAGIC 0x53504D47 /* "GMPS" */
+
 #if defined(__ASSEMBLER__)
 // Register-sized load/store for trap.S and startup.S.
 #if __riscv_xlen == 64

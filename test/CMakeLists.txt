@@ -57,10 +57,14 @@ set (_linker_qemu "${UOS_BOARD_LINKER_QEMU}")
 # host, the Cortex-M0 mailbox -- would be exactly the part not emulated. The
 # board is tested on hardware, and says so by staying silent here rather than
 # by carrying a second linker script and a suite that cannot pass.
+# A board without a hardware linker script has no `hwd` images yet (a board
+# whose bring-up is still emulated); one without a QEMU one has no `qemu`.
+set (_variants "")
 if (_linker_qemu)
-  set (_variants qemu hwd)
-else ()
-  set (_variants hwd)
+  list (APPEND _variants qemu)
+endif ()
+if (_linker_hwd)
+  list (APPEND _variants hwd)
 endif ()
 
 # What every application of this port is compiled with. The predecessor's
@@ -150,6 +154,12 @@ function (board_test_qemu_libs _app _out)
 endfunction ()
 function (board_test_qemu_sources _app _out)
   set (${_out} "" PARENT_SCOPE)
+endfunction ()
+# How many harts a `qemu` image built on a stand-in library drives: 1 unless
+# the board says otherwise (an SMP board run on QEMU virt -smp N, whose
+# stand-in is the same port, SMP-capable).
+function (board_test_qemu_ncpu _app _out)
+  set (${_out} 1 PARENT_SCOPE)
 endfunction ()
 function (board_test_qemu_includes _app _out)
   set (${_out} "" PARENT_SCOPE)
@@ -288,11 +298,9 @@ foreach (_dir IN LISTS _test_dirs)
         # A harness suite's test library is not the board's, so it stays.
         set (_variant_libs ${_qemu_libs} ${_app_libs})
         set (_variant_linker "")
-        # And so is the board's core count: the replacement is the generic
-        # single-core micro-os-plus::cortexm-qemu, whose os-core.cpp has one
-        # current_thread_, not one per CPU. An image built for the board's
-        # NCPU does not compile against it (os-core.cpp:497/833).
-        set (_variant_ncpu 1)
+        # And so may be the board's core count: 1 unless the board's
+        # board_test_qemu_ncpu() says the stand-in runs its harts too.
+        board_test_qemu_ncpu ("${_app}" _variant_ncpu)
       endif ()
       board_test_qemu_sources ("${_app}" _qemu_sources)
       if (_qemu_sources)

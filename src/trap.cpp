@@ -24,6 +24,7 @@
 #include <port_ctx.hpp>
 #include <riscv-board.hpp>
 #include <riscv-csr.hpp>
+#include <riscv-hart.hpp>
 #include <semihosting.hpp>
 
 extern "C"
@@ -32,10 +33,11 @@ extern "C"
 
   volatile bool riscv_semihosting_absent = false;
 
-  // Defined in os-core.cpp: re-arm mtimecmp for the next tick, and push it
-  // out again if the handler overran it.
-  void riscv_port_tick_rearm (void);
-  void riscv_port_tick_guard (void);
+  // os-core.cpp: the tick (re-arm, handler, overrun guard), the software
+  // interrupt as a cross-hart reschedule request, and "is a switch due".
+  void riscv_port_tick (void);
+  void riscv_port_ipi_received (void);
+  bool riscv_port_switch_due (void);
 
   // soft-irq.cpp: run the pending, enabled software interrupt lines.
   void riscv_soft_irq_dispatch (void);
@@ -135,8 +137,8 @@ namespace
   void*
   trap_exit (ctx_t* frame)
   {
-    if (riscv_trap_nesting == 1 && os::rtos::scheduler::is_reschedule_pending
-        && !os::rtos::scheduler::locked ())
+    if (riscv_trap_nesting[riscv::this_hart ()] == 1
+        && riscv_port_switch_due ())
       {
         return os::rtos::port::scheduler::switch_stacks (
             reinterpret_cast<os::rtos::port::stack::element_t*> (frame));
@@ -159,12 +161,11 @@ riscv_trap_dispatch (ctx_t* frame)
           // MSIP: the software interrupt lines (soft-irq.cpp) only.
           clint::msip_clear ();
           riscv_soft_irq_dispatch ();
+          riscv_port_ipi_received ();
           return trap_exit (frame);
 
         case riscv::csr::IRQ_M_TIMER:
-          riscv_port_tick_rearm ();
-          os_systick_handler ();
-          riscv_port_tick_guard ();
+          riscv_port_tick ();
           return trap_exit (frame);
 
         case riscv::csr::IRQ_M_EXT:
@@ -178,7 +179,7 @@ riscv_trap_dispatch (ctx_t* frame)
 
   if (mcause == riscv::csr::EXC_ECALL_M
       && frame->x[CTX_A7] == RISCV_PORT_YIELD_ECALL
-      && riscv_trap_nesting == 1)
+      && riscv_trap_nesting[riscv::this_hart ()] == 1)
     {
       // A thread's context switch (os-core.cpp riscv_port_yield). The
       // thread resumes after the 4-byte ecall when it is switched back in.

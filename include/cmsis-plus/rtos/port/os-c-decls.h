@@ -47,16 +47,36 @@ typedef struct
 
 /* OS_NCPU is a BOARD fact (test/boards/<board>/board.cmake -> NCPU) and has
  * no default here: a board that does not say how many CPUs it has does not
- * compile. The first board, the Milk-V Duo, runs µOS++ on its one main C906
- * hart; the second C906 (the "little" core) is not driven by this port. */
+ * compile. The Milk-V Duo runs µOS++ on its one main C906 hart (OS_NCPU=1;
+ * its "little" C906 is not driven by this port); the Pico 2 runs it on both
+ * Hazard3 harts (OS_NCPU=2, OS_USE_SMP_SCHEDULER). A hart is identified by
+ * mhartid, which must be 0..OS_NCPU-1. */
 #ifndef OS_NCPU
 #error "OS_NCPU is a board fact: set UOS_BOARD_NCPU in test/boards/<board>/board.cmake."
 #endif
-#if (OS_NCPU != 1)
-#error "The RISC-V port is single-hart for now (OS_NCPU=1)."
+#if (OS_NCPU > 1) && !defined(OS_USE_SMP_SCHEDULER)
+#error "OS_NCPU > 1 needs OS_USE_SMP_SCHEDULER (uos_add_app defines both)."
 #endif
+#if (OS_NCPU < 1) || (OS_NCPU > 8)
+#error "The RISC-V port supports 1..8 harts."
+#endif
+
 #if defined(OS_USE_SMP_SCHEDULER)
-#error "The RISC-V port does not implement the SMP scheduler yet."
+/* The recursive kernel spinlock: `word` is taken with an AMO swap (the A
+   extension; on the RP2350 the global monitor makes AMOs atomic across both
+   cores), `owner` is the holding hart, `depth` the nesting. */
+typedef struct
+{
+  volatile uint32_t word;
+  volatile uint32_t owner;
+  volatile uint32_t depth;
+} os_port_smp_klock_t;
+#define SMP_NO_OWNER 0xFFFFFFFFu
+/* The cross-hart "reschedule" interrupt (the kernel's board contract asks a
+   multi-CPU board for it): on RISC-V it is the machine software interrupt,
+   mcause code 3, raised in the target hart's MSIP (CLINT msip[hart]; on the
+   RP2350, SIO RISCV_SOFTIRQ). */
+#define OS_SMP_IPI_SGI 3
 #endif
 
 #if __riscv_xlen == 64

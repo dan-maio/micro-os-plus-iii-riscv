@@ -19,7 +19,7 @@
 
 #if defined(HW_BUILD) && defined(SEMIHOST)
 #include <semihosting.hpp>
-extern "C" volatile std::uint32_t riscv_trap_nesting; // trap.S
+#include <riscv-hart.hpp>
 #endif
 
 namespace
@@ -71,7 +71,7 @@ namespace
   void
   semi_copy (const char* s, std::size_t n)
   {
-    if (!semihosting::attached () || riscv_trap_nesting != 0)
+    if (!semihosting::attached () || riscv::in_trap ())
       {
         return;
       }

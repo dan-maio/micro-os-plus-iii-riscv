@@ -29,18 +29,23 @@
 
 #include <cmsis-plus/diag/trace.h>
 #include <riscv-csr.hpp>
+#include <riscv-hart.hpp>
 #include <riscv-board.hpp>
+#include <clint.hpp>
 
 extern "C"
 {
-  // Trap nesting depth, maintained by riscv_trap_entry (src/trap.S).
-  extern volatile uint32_t riscv_trap_nesting;
   // rdtime value at the last system tick (src/rtos/os-core.cpp).
   extern volatile uint64_t riscv_port_last_tick;
-  // A context switch requested by a thread while mstatus.MIE was clear
-  // (src/rtos/os-core.cpp); done when the critical section ends.
-  extern volatile bool riscv_port_yield_deferred;
+  // Per hart: a context switch requested by a thread while mstatus.MIE was
+  // clear (src/rtos/os-core.cpp); done when the critical section ends.
+  extern volatile bool riscv_port_yield_deferred[];
   void riscv_port_deferred_yield (void);
+#if defined(OS_USE_SMP_SCHEDULER)
+  // The recursive kernel spinlock (os-core.cpp); call with MIE clear.
+  void riscv_smp_klock_acquire (void);
+  void riscv_smp_klock_release (void);
+#endif
 }
 
 namespace os
@@ -56,7 +61,11 @@ namespace os
         {
           // PORT_GREETING names the board; board.cmake defines it.
           trace::printf ("Scheduler: " PORT_GREETING
-                         ", RV64 M-mode, preemptive, %u Hz tick, ecall switch\n",
+                         ", RV%u M-mode, %u hart%s, preemptive, %u Hz tick, "
+                         "ecall switch\n",
+                         static_cast<unsigned> (riscv::XLEN),
+                         static_cast<unsigned> (OS_NCPU),
+                         (OS_NCPU > 1) ? "s (SMP)" : "",
                          static_cast<unsigned> (OS_INTEGER_SYSTICK_FREQUENCY_HZ));
           trace::printf ("Timebase: %u Hz\n",
                          static_cast<unsigned> (riscv_board::TIMEBASE_HZ));
@@ -77,7 +86,19 @@ namespace os
         inline bool __attribute__ ((always_inline))
         locked (void)
         {
+#if defined(OS_USE_SMP_SCHEDULER)
+          // Masked, so the thread cannot move to another hart between
+          // reading the hart id and reading that hart's lock state.
+          const riscv::reg_t s = riscv::csr::mstatus_clear_mie ();
+          const bool v = lock_state[riscv::this_hart ()] != state::unlocked;
+          if (s)
+            {
+              riscv::csr::mstatus_set_mie ();
+            }
+          return v;
+#else
           return lock_state != state::unlocked;
+#endif
         }
 
         // The idle thread does NOT sleep in `wfi`: it returns at once and
@@ -98,7 +119,7 @@ namespace os
         inline bool __attribute__ ((always_inline))
         in_handler_mode (void)
         {
-          return riscv_trap_nesting != 0;
+          return riscv::in_trap ();
         }
 
         inline bool
@@ -107,21 +128,36 @@ namespace os
           return true;
         }
 
+        // Single hart: mstatus.MIE is the whole critical section. SMP: MIE
+        // masks this hart, and the recursive kernel spinlock keeps the other
+        // hart(s) out of the kernel's data, as SIO spinlock 0 does in the
+        // RP2350 Cortex-M port.
         inline rtos::interrupts::state_t __attribute__ ((always_inline))
         critical_section::enter (void)
         {
-          return riscv::csr::mstatus_clear_mie ();
+          const riscv::reg_t s = riscv::csr::mstatus_clear_mie ();
+#if defined(OS_USE_SMP_SCHEDULER)
+          riscv_smp_klock_acquire ();
+#endif
+          return s;
         }
 
         inline void __attribute__ ((always_inline))
         critical_section::exit (rtos::interrupts::state_t state)
         {
+#if defined(OS_USE_SMP_SCHEDULER)
+          riscv_smp_klock_release ();
+#endif
           if (state & riscv::csr::MSTATUS_MIE)
             {
+              // Read the flag while still masked (the hart cannot change
+              // under the read), then unmask.
+              const bool deferred
+                  = riscv_port_yield_deferred[riscv::this_hart ()];
               riscv::csr::mstatus_set_mie ();
               // What PRIMASK clearing does for a pending PendSV on
               // Cortex-M: a switch asked for inside the section happens now.
-              if (riscv_port_yield_deferred)
+              if (deferred)
                 {
                   riscv_port_deferred_yield ();
                 }
@@ -187,7 +223,7 @@ namespace os
       inline uint32_t __attribute__ ((always_inline))
       clock_highres::cycles_since_tick (void)
       {
-        const uint64_t now = riscv::csr::rdtime ();
+        const uint64_t now = clint::now ();
         const uint64_t since = now - riscv_port_last_tick;
         const uint32_t per = cycles_per_tick ();
         return (since >= per) ? (per - 1) : static_cast<uint32_t> (since);

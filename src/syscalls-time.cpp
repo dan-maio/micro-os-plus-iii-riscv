@@ -34,6 +34,7 @@
 
 #include <riscv-board.hpp>
 #include <riscv-csr.hpp>
+#include <clint.hpp>
 
 #define RISCV_WEAK extern "C" __attribute__ ((weak))
 
@@ -43,7 +44,7 @@ _gettimeofday (struct timeval* tv, void* tz)
   (void) tz;
   if (tv != nullptr)
     {
-      const std::uint64_t t = riscv::csr::rdtime ();
+      const std::uint64_t t = clint::now ();
       const std::uint64_t hz = riscv_board::TIMEBASE_HZ;
       tv->tv_sec = static_cast<time_t> (t / hz);
       tv->tv_usec = static_cast<suseconds_t> ((t % hz) * 1000000ULL / hz);
@@ -55,7 +56,7 @@ RISCV_WEAK clock_t
 _times (struct tms* buf)
 {
   // times() counts in clock ticks of CLOCKS_PER_SEC (newlib's _SC_CLK_TCK).
-  const std::uint64_t t = riscv::csr::rdtime ();
+  const std::uint64_t t = clint::now ();
   const clock_t c = static_cast<clock_t> (
       t / (riscv_board::TIMEBASE_HZ / static_cast<std::uint64_t> (CLOCKS_PER_SEC)));
   if (buf != nullptr)

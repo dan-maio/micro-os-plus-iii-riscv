@@ -109,19 +109,40 @@ riscv_trap_entry:
 	la	gp, __global_pointer$
 	.option pop
 
-	/* a0 = the frame. Count the nesting and move to the interrupt stack. */
+	/* a0 = the frame. Count this hart's nesting and, on the outermost
+	 * trap, move to this hart's interrupt stack (riscv_irq_stack_top[],
+	 * os-core.cpp). Every caller-saved register is in the frame, so t0..t4
+	 * are free here. */
 	mv	a0, sp
+#if defined(OS_NCPU) && (OS_NCPU > 1)
+	csrr	t4, mhartid
+#else
+	li	t4, 0
+#endif
+	slli	t3, t4, 2
 	la	t0, riscv_trap_nesting
+	add	t0, t0, t3
 	lw	t1, 0(t0)
 	addi	t2, t1, 1
 	sw	t2, 0(t0)
 	bnez	t1, 1f
-	la	sp, __irq_stack_top
+	slli	t3, t4, (PORT_REGBYTES / 4 + 1)	/* hart * REGBYTES */
+	la	t0, riscv_irq_stack_top
+	add	t0, t0, t3
+	REG_L	sp, 0(t0)
 1:
 	call	riscv_trap_dispatch
 
-	/* a0 = the frame to resume (another thread's after a switch). */
+	/* a0 = the frame to resume (another thread's after a switch). The
+	 * trap returns on the hart it was taken on. */
+#if defined(OS_NCPU) && (OS_NCPU > 1)
+	csrr	t4, mhartid
+#else
+	li	t4, 0
+#endif
+	slli	t3, t4, 2
 	la	t0, riscv_trap_nesting
+	add	t0, t0, t3
 	lw	t1, 0(t0)
 	addi	t1, t1, -1
 	sw	t1, 0(t0)
@@ -210,4 +231,8 @@ riscv_trap_restore:
 	.balign 4
 	.globl	riscv_trap_nesting
 riscv_trap_nesting:
-	.word	0
+#if defined(OS_NCPU)
+	.space	4 * OS_NCPU
+#else
+	.space	4
+#endif

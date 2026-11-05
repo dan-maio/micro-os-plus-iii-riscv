@@ -27,9 +27,16 @@ namespace riscv_board
   inline constexpr std::uintptr_t CLINT_MSIP = CLINT_BASE + 0x0000u;
   inline constexpr std::uintptr_t CLINT_MTIMECMP = CLINT_BASE + 0x4000u;
   inline constexpr std::uintptr_t CLINT_MTIME = CLINT_BASE + 0xBFF8u;
+  // Per-hart register strides (a standard CLINT).
+  inline constexpr std::uintptr_t CLINT_MTIMECMP_STRIDE = 8u;
+  inline constexpr std::uintptr_t CLINT_MSIP_STRIDE = 4u;
   // A 64-bit store is two stores on RV32: write the halves in the safe order.
   inline constexpr bool MTIMECMP_SPLIT32 = (__riscv_xlen == 32);
   inline constexpr bool MTIME_READABLE = true;
+
+  // The port's clock source: the time CSR (rdtime) where the hart has it,
+  // else the platform timer's MMIO mtime. Here: QEMU implements the time CSR.
+  inline constexpr bool TIME_CSR = true;
 
   inline constexpr std::uint32_t TIMEBASE_HZ = 10000000u;
 
