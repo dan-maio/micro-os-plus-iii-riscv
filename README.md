@@ -245,28 +245,35 @@ logs show `!PASSED` in several runs). Not yet root-caused.
 
 QEMU after the `ecall` switch: port tree 8/8, harness release 14/14.
 
-Hardware, Milk-V Duo, full run (`hw-all.sh`, `RESET=wdt`), after the `ecall`
-switch:
+Hardware, Milk-V Duo, full run (`hw-all.sh`, `RESET=wdt`: BL2 watchdog reset
+and 4 s of boot before every test), every test ending in its semihosting exit
+with code 0:
 
 | test | port tree | harness |
 |---|---|---|
-| blinky | -- | PASS |
-| clock-test | PASS | PASS |
-| cmsis-os-validator | -- | PASS (all cases) |
-| exc-test | PASS | PASS |
-| fp-switch | -- | PASS |
-| instrumentation | -- | PASS |
-| mmu-test | FAIL -> fixed (MAEE attributes) | FAIL -> fixed |
-| mos-test1 | PASS | PASS |
-| mutex-ceiling-test | PASS | PASS |
-| mutex-stress | -- | PASS |
-| rtos-apis | -- | hung in the tick trap -> fixed (tick guard, no semihosting in traps) |
-| sc-test-ko | PASS | not run (watchdog reset failed after the hang) |
-| semihosting-test | FAIL -> fixed (test: OpenOCD's SYS_ERRNO starts at -1) | -- |
-| smp_test0 | PASS | not run |
+| blinky | -- | **PASS** |
+| clock-test | **PASS** | **PASS** |
+| cmsis-os-validator | -- | **PASS** |
+| exc-test | **PASS** | **PASS** |
+| fp-switch | -- | **PASS** |
+| instrumentation | -- | **PASS** |
+| mmu-test | **PASS** | **PASS** |
+| mos-test1 | **PASS** | **PASS** |
+| mutex-ceiling-test | **PASS** | **PASS** |
+| mutex-stress | -- | **PASS** |
+| rtos-apis | -- | **PASS** |
+| sc-test-ko | **PASS** | **PASS** |
+| semihosting-test | **PASS** | **PASS** |
+| smp_test0 | **PASS** | **PASS** |
+| total | **8/8** (228 s) | **14/14** (606 s) |
 
-The fixes pass on QEMU (port 8/8, harness 14/14); the board rerun of the
-fixed and unrun tests follows.
+What the first full run found, fixed since: `mmu-test` (C906 MAEE page
+attributes), `rtos-apis` (tick-handler overrun; semihosting from a trap),
+`semihosting-test` (OpenOCD's SYS_ERRNO starts at -1). See *The port*.
+
+Seen during the run, not a failure: OpenOCD logged `dmstatus=0x0` ("Debug
+Module version 0") once in `mutex-stress` and once in `rtos-apis`, the two
+tests with the most semihosting traffic; it recovered and both passed.
 
 Before the switch rewrite every blocking test stopped at its first blocking
 call (the MSIP window described under *The port*).
