@@ -6,7 +6,11 @@
 # was built for); the single-core ones run on one.
 # -----------------------------------------------------------------------------
 
-set (_pico2_smp_tests smp-test2)
+set (_pico2_smp_tests smp-test2 smp-test3 smp-test4 smp-test-ko smp-mat-test)
+
+# Tests that program RP2350 peripherals directly (TIMER0, SIO): hardware
+# only, as on the Cortex-M Pico 2 board.
+set (BOARD_TEST_HWD_ONLY smp-test3 smp-test4 smp-test-ko smp-mat-test)
 
 function (board_test_qemu_libs _app _out)
   if (UOS_QEMU_STANDIN)

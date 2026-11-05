@@ -68,8 +68,10 @@ if [[ ! -f "$ELF" ]]; then
 fi
 ELF="$(readlink -f "$ELF")"
 
-# Never run a stale image (an ELF older than any port, board or test source).
-STALE="$(find "$ROOT/src" "$ROOT/include" "$HERE" "$ROOT/test/pico2" \
+# Never run a stale image: an ELF older than any port or board source, or
+# than its own test's sources (another test's edit does not make it stale).
+STALE="$(find "$ROOT/src" "$ROOT/include" "$HERE" \
+  "$ROOT/test/pico2/$APP" "$ROOT/test/pico2/include" "$ROOT/test/pico2/src" \
   -type f -newer "$ELF" \( -name '*.cpp' -o -name '*.c' -o -name '*.S' -o -name '*.h' -o -name '*.hpp' -o -name '*.ld' \) | head -3)"
 if [[ -n "$STALE" ]]; then
   echo "hw.sh: $ELF is older than its sources -- rebuild first:" >&2

@@ -337,6 +337,33 @@ twice in a row** -- worker 0 on core 0 and worker 1 on core 1, 20 rounds
 each, 40 handoffs, exit 0. A worker's lines are ~650 ms apart in RTOS time on
 the board against 500 ms on QEMU (cause not measured yet).
 
+Phase 4 (porting the Cortex-M Pico 2 tests to the Hazard3 board), first batch,
+on the Pico 2 (Raspberry Pi Debug Probe, `test/boards/pico2/hw.sh`):
+
+| test | cores | result |
+|---|---|---|
+| sc-test-ko | 1 | **PASS** (10/10 kernel objects) |
+| smp-test1 | 1 | **PASS** |
+| smp-test2 | 2 | **PASS** (40 handoffs, worker 1 on core 1) |
+| smp-test3 | 2 | **PASS** (cross-core IPI wake-ups, TIMER0 latency) |
+| smp-test4 | 2 | **PASS** (kernel objects under dual-core contention) |
+| smp-test-ko | 2 | **PASS** (10/10) |
+| smp-mat-test | 2 | **PASS**: 120x120 system, parallel block vs classical elimination identical (max diff 0), 1.373x on 2 cores (soft-float) |
+
+QEMU (`qemu-system-riscv32`, 1 or 2 harts): sc-test-ko, smp-test1, smp-test2
+pass; smp-test3/4, smp-test-ko, smp-mat-test program RP2350 peripherals
+(TIMER0, SIO) and are hardware only, as on the Cortex-M board.
+
+Porting changes: `bsp/` headers -> the board's; Arm idle `dsb`/`wfi` -> yield
+only; `dmb`/`__DMB` -> `fence rw, rw`; smp-mat-test's configuration-error
+`wfi` parks end the run with FAIL, and it prints every tenth element of the
+solution (all 120 are still compared) -- printing all of them cost one
+semihosting round trip per call and once ended with the debug module lost
+after line 114 (`halted due to undefined`, `dmcontrol=0x0`; not explained
+yet). `hw.sh`'s stale-image check was narrowed (both boards) to the port,
+the board and the test's own sources: another test's edit made every image
+look stale.
+
 Found on the way, in the runner: `qemu.sh` ran under `pipefail` and tested the
 image with `nm ... | grep -q`. `grep -q` exits at the first match, `nm` then
 dies of SIGPIPE, and the test reads false -- intermittently. SMP images were

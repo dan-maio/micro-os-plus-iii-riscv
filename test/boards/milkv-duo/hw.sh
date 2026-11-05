@@ -67,9 +67,11 @@ if [[ ! -f "$ELF" ]]; then
   exit 2
 fi
 
-# Never run a stale image: an ELF older than any port or board source is
-# refused (it happened: a fix was "tested" on the board with an old build).
-STALE="$(find "$ROOT/src" "$ROOT/include" "$HERE" "$ROOT/test/milkv-duo" \
+# Never run a stale image: an ELF older than any port or board source, or
+# than its own test's sources, is refused (it happened: a fix was "tested"
+# on the board with an old build). Another test's edit does not count.
+STALE="$(find "$ROOT/src" "$ROOT/include" "$HERE" \
+  "$ROOT/test/milkv-duo/$APP" "$ROOT/test/milkv-duo/include" "$ROOT/test/milkv-duo/src" \
   -type f -newer "$(readlink -f "$ELF")" \( -name '*.cpp' -o -name '*.c' -o -name '*.S' -o -name '*.h' -o -name '*.hpp' -o -name '*.ld' \) | head -3)"
 if [[ -n "$STALE" ]]; then
   echo "hw.sh: $ELF is older than its sources -- rebuild first:" >&2
