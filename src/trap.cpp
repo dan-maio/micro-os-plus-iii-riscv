@@ -1,12 +1,16 @@
 /*
  * trap.cpp -- the C half of the RISC-V trap path (see trap.S).
  *
- *   machine software interrupt (MSIP)   context switch: return the incoming
- *                                       thread's frame
+ *   ecall, a7 = RISCV_PORT_YIELD_ECALL  a thread's context switch: return
+ *                                       the incoming thread's frame
+ *   machine software interrupt (MSIP)   the software interrupt lines
  *   machine timer interrupt (MTIP)      the system tick
  *   machine external interrupt (MEIP)   the board (PLIC), if it wants it
  *   breakpoint at a semihosting trap    no debugger: skip it, a0 = -1
  *   any other exception                 a fault report, then stop
+ *
+ * Leaving the outermost trap, a reschedule left pending by the handler
+ * (a woken thread) switches threads there.
  *
  * Copyright (c) 2026 Dan. MIT license.
  */
@@ -113,9 +117,29 @@ namespace
     raw (" sp=");
     raw_hex (reinterpret_cast<std::uint64_t> (frame) + ctx_size_bytes);
     raw ("\r\nRESULT: FAIL (trap)\r\n");
-    // A debugger is told; without one, park the hart.
-    semihosting::write0 ("RESULT: FAIL (trap)\n");
+    // The verdict on the semihosting channel, then SYS_EXIT stops the run
+    // (without a debugger, exit_failure() spins).
+    semihosting::write_str ("RESULT: FAIL (trap)\n");
     semihosting::exit_failure ();
+  }
+} // namespace
+
+namespace
+{
+  // Leaving the outermost trap: if the trap made another thread due (a tick,
+  // a post from an interrupt), resume that thread instead -- the job PendSV
+  // tail-chaining does on Cortex-M, done here without a second interrupt.
+  // A nested trap (an exception inside a handler) never switches.
+  void*
+  trap_exit (ctx_t* frame)
+  {
+    if (riscv_trap_nesting == 1 && os::rtos::scheduler::is_reschedule_pending
+        && !os::rtos::scheduler::locked ())
+      {
+        return os::rtos::port::scheduler::switch_stacks (
+            reinterpret_cast<os::rtos::port::stack::element_t*> (frame));
+      }
+    return frame;
   }
 } // namespace
 
@@ -130,31 +154,37 @@ riscv_trap_dispatch (ctx_t* frame)
       switch (mcause & 0xFFF)
         {
         case riscv::csr::IRQ_M_SOFT:
-          // MSIP carries two requests: software interrupt lines
-          // (soft-irq.cpp) and the context switch. Run the lines first, in
-          // handler mode; they may make a thread ready. Then switch, but
-          // only if a reschedule is pending.
+          // MSIP: the software interrupt lines (soft-irq.cpp) only.
           clint::msip_clear ();
           riscv_soft_irq_dispatch ();
-          if (os::rtos::scheduler::is_reschedule_pending)
-            {
-              return os::rtos::port::scheduler::switch_stacks (
-                  reinterpret_cast<os::rtos::port::stack::element_t*> (frame));
-            }
-          return frame;
+          return trap_exit (frame);
 
         case riscv::csr::IRQ_M_TIMER:
           riscv_port_tick_rearm ();
           os_systick_handler ();
-          return frame;
+          return trap_exit (frame);
 
         case riscv::csr::IRQ_M_EXT:
           riscv_board_external_interrupt ();
-          return frame;
+          return trap_exit (frame);
 
         default:
           fault (frame, mcause);
         }
+    }
+
+  if (mcause == riscv::csr::EXC_ECALL_M
+      && frame->x[CTX_A7] == RISCV_PORT_YIELD_ECALL
+      && riscv_trap_nesting == 1)
+    {
+      // A thread's context switch (os-core.cpp riscv_port_yield). The
+      // thread resumes after the 4-byte ecall when it is switched back in.
+      // The marker is consumed: a later, unrelated ecall of this thread
+      // must not find it still in a7.
+      frame->x[0] += 4;
+      frame->x[CTX_A7] = 0;
+      return os::rtos::port::scheduler::switch_stacks (
+          reinterpret_cast<os::rtos::port::stack::element_t*> (frame));
     }
 
   if (mcause == riscv::csr::EXC_BREAKPOINT && is_semihosting_trap (frame->x[0]))

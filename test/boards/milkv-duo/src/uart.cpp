@@ -80,7 +80,7 @@ namespace
             chunk[k++] = s[i++];
           }
         chunk[k] = '\0';
-        semihosting::write0 (chunk);
+        semihosting::write_str (chunk);
       }
   }
 #endif

@@ -2,22 +2,36 @@
  * os-core.cpp -- the port's half of the µOS++ III scheduler, RISC-V RV64,
  * machine mode, one hart.
  *
- * The shape is the upstream Cortex-M port's, translated:
+ * RISC-V has no PendSV. The context switch uses what RISC-V guarantees:
  *
- *   Cortex-M                      this port
- *   ---------------------------   ------------------------------------------
- *   PendSV                        machine software interrupt (CLINT MSIP)
- *   SysTick                       machine timer (CLINT mtimecmp vs rdtime)
- *   PRIMASK                       mstatus.MIE
- *   exception frame + r4-r11      full frame built by trap.S (port_ctx.hpp)
- *   IPSR != 0                     riscv_trap_nesting != 0
+ *   a thread switches     reschedule() executes `ecall` (a7 = the port's
+ *                         marker). An exception is precise and synchronous:
+ *                         the trap is taken AT the ecall, so a thread that
+ *                         has just marked itself suspended cannot run one
+ *                         more instruction before it is saved. trap.cpp
+ *                         calls switch_stacks() and mrets on the incoming
+ *                         thread's frame; the caller continues after the
+ *                         ecall when it is switched back in.
+ *   a trap makes a thread due (tick, post from an interrupt)
+ *                         reschedule() only sets is_reschedule_pending;
+ *                         riscv_trap_dispatch() switches on the way out of
+ *                         the outermost trap. No second interrupt.
+ *   asked with MIE clear  (inside a critical section) deferred:
+ *                         critical_section::exit() switches when it sets
+ *                         MIE again -- what clearing PRIMASK does for a
+ *                         pending PendSV.
+ *   scheduler locked      nothing; unlocking switches if one is pending.
  *
- * reschedule() never switches in place. It raises MSIP; the trap that follows
- * (immediately, or as soon as interrupts are unmasked / the current trap
- * returns) saves the running thread, calls switch_stacks() and resumes from
- * the incoming thread's frame. Every switch takes the same path, so the frame
- * of a thread that is not running is always one trap.S wrote or one
- * context::create() built in exactly that layout.
+ * A CLINT MSIP write is a posted store: the C906 takes the interrupt some
+ * cycles after it (QEMU at once). An MSIP-based "PendSV" therefore let a
+ * suspending thread run past reschedule() and remove its own wake-up --
+ * measured on the Duo. MSIP now carries only the software interrupt lines
+ * (soft-irq.cpp).
+ *
+ *   SysTick       machine timer (CLINT mtimecmp vs rdtime)
+ *   PRIMASK       mstatus.MIE
+ *   frame         full frame built by trap.S (port_ctx.hpp)
+ *   IPSR != 0     riscv_trap_nesting != 0
  *
  * Copyright (c) Liviu Ionescu (upstream Cortex-M port, structure).
  * Copyright (c) 2026 Dan. MIT license.
@@ -48,6 +62,38 @@ extern "C"
   // mtime - rdtime, measured once when the tick starts (clint.hpp).
   volatile std::int64_t riscv_port_clint_offset = 0;
   void riscv_port_tick_rearm (void);
+
+  volatile bool riscv_port_yield_deferred = false;
+  void riscv_port_yield (void);
+  void riscv_port_deferred_yield (void);
+}
+
+// The thread-mode context switch: a synchronous `ecall` (mcause 11) with
+// a7 = RISCV_PORT_YIELD_ECALL. The exception is precise -- taken AT this
+// instruction, with interrupts on or off -- so the calling thread does not
+// execute one more instruction before trap.cpp has saved it and resumed the
+// next thread. It continues after the ecall only when switched back in.
+// All registers are saved and restored by trap.S; nothing is clobbered.
+void
+riscv_port_yield (void)
+{
+  register std::uint64_t a7 __asm__ ("a7") = RISCV_PORT_YIELD_ECALL;
+  // a7 comes back 0 (trap.cpp consumes the marker).
+  __asm__ volatile("ecall" : "+r"(a7) : : "memory");
+}
+
+// A switch asked for while it could not happen (MIE clear, or the scheduler
+// locked): do it now, if it can happen now.
+void
+riscv_port_deferred_yield (void)
+{
+  if (os::rtos::interrupts::in_handler_mode ()
+      || os::rtos::scheduler::locked ()
+      || (RISCV_CSR_READ (mstatus) & riscv::csr::MSTATUS_MIE) == 0)
+    {
+      return;
+    }
+  riscv_port_yield ();
 }
 
 namespace
@@ -180,16 +226,18 @@ namespace os
 
           lock_state = state::init;
 
+          // MSIP is left to the software interrupt lines (soft-irq.cpp).
           clint::msip_clear ();
           RISCV_CSR_SET (mie, riscv::csr::MIE_MSIE);
 
-          // Request the first switch, then let it happen.
-          reschedule ();
-          riscv::csr::mstatus_set_mie ();
+          // The first switch, synchronously. The boot context is saved into
+          // fake_thread (with MIE clear) and never resumed; the first
+          // thread's frame (context::create) enables interrupts on mret.
+          riscv_port_yield ();
 
           for (;;)
             {
-              __asm__ volatile("wfi");
+              __asm__ volatile("" ::: "memory");
             }
         }
 
@@ -206,9 +254,10 @@ namespace os
           }
           // Unlocking may have left a switch pending behind the lock.
           if (tmp == state::locked && state == state::unlocked
-              && rtos::scheduler::is_reschedule_pending)
+              && (rtos::scheduler::is_reschedule_pending
+                  || riscv_port_yield_deferred))
             {
-              clint::msip_set ();
+              riscv_port_deferred_yield ();
             }
           return tmp;
         }
@@ -216,23 +265,39 @@ namespace os
         void
         reschedule (void)
         {
-          if (rtos::scheduler::locked ()
-              || (rtos::interrupts::in_handler_mode ()
-                  && !rtos::scheduler::preemptive ()))
+          if (rtos::scheduler::locked ())
             {
               return;
             }
 
-          rtos::scheduler::is_reschedule_pending = true;
-          clint::msip_set ();
+          if (rtos::interrupts::in_handler_mode ())
+            {
+              // From a trap: the switch is done by riscv_trap_dispatch()
+              // on the way out of the outermost trap.
+              if (rtos::scheduler::preemptive ())
+                {
+                  rtos::scheduler::is_reschedule_pending = true;
+                }
+              return;
+            }
+
+          if ((RISCV_CSR_READ (mstatus) & riscv::csr::MSTATUS_MIE) == 0)
+            {
+              // Inside a critical section: switching now would let another
+              // thread run inside it. critical_section::exit() does it.
+              riscv_port_yield_deferred = true;
+              return;
+            }
+
+          riscv_port_yield ();
         }
 
         stack::element_t*
         switch_stacks (stack::element_t* sp)
         {
-          // Runs in the MSIP trap, interrupts masked.
-          clint::msip_clear ();
+          // Runs in a trap, interrupts masked.
           rtos::scheduler::is_reschedule_pending = false;
+          riscv_port_yield_deferred = false;
 
           rtos::thread* old_thread = rtos::scheduler::current_thread_;
           old_thread->context_.port_.stack_ptr = sp;

@@ -33,6 +33,7 @@ namespace riscv
     inline constexpr std::uint64_t IRQ_M_EXT = 11;
     inline constexpr std::uint64_t EXC_ILLEGAL = 2;
     inline constexpr std::uint64_t EXC_BREAKPOINT = 3;
+    inline constexpr std::uint64_t EXC_ECALL_M = 11;
 
 #define RISCV_CSR_READ(name)                                                  \
   ({                                                                          \

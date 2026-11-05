@@ -28,6 +28,7 @@ namespace riscv_board
   inline constexpr std::uintptr_t CLINT_MTIMECMP = CLINT_BASE + 0x4000u;
   inline constexpr std::uintptr_t CLINT_MTIME = CLINT_BASE + 0xBFF8u;
   inline constexpr bool MTIMECMP_SPLIT32 = false;
+  inline constexpr bool MTIME_READABLE = true;
 
   inline constexpr std::uint32_t TIMEBASE_HZ = 10000000u;
 

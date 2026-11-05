@@ -1,27 +1,38 @@
-/*
- * semihosting.hpp -- RISC-V semihosting (the Arm semihosting protocol over
- * the RISC-V "magic" ebreak sequence).
+/**
+ * @file  semihosting.hpp
+ * @brief ARM-protocol semihosting for the RISC-V port (RV64).
  *
- * The trap is three uncompressed instructions, on one page:
+ * The same API as the C++ AArch32 and AArch64 ports' semihosting.hpp --
+ * write_char, write_str, write_buf, exit, exit_success, exit_failure,
+ * report_result -- so a test written against it is written once. Only the
+ * trap differs:
  *
- *     slli x0, x0, 0x1f      # 0x01f01013  entry marker
- *     ebreak                 # 0x00100073
- *     srai x0, x0, 7         # 0x40705013  exit marker (7 = semihosting)
+ *   AArch64   HLT #0xF000,            op in x0, parameter in x1
+ *   AArch32   SVC 0x123456 / HLT,     op in r0, parameter in r1
+ *   RISC-V    slli x0,x0,0x1f         op in a0, parameter in a1, result a0
+ *             ebreak
+ *             srai x0,x0,7            (uncompressed, aligned, one page)
  *
- * a0 holds the operation, a1 the argument; the result returns in a0. Both
  * OpenOCD (`arm semihosting enable` on a riscv target) and QEMU
- * (-semihosting-config enable=on) recognise it.
+ * (-semihosting-config enable=on) both recognise the sequence.
  *
- * WITHOUT a debugger the ebreak is an ordinary breakpoint exception. The
+ * RV64 is a 64-bit target: every parameter block is made of 64-bit words,
+ * and SYS_EXIT takes a TWO-field block { reason, exit_status }, exactly as
+ * on AArch64.
+ *
+ * A test ENDS with exit_success() / exit_failure() (directly, through
+ * report_result(), through hw_result::ok/fail, or through _Exit()): that is
+ * what stops the run -- OpenOCD reports "application exited with N", QEMU
+ * exits with N. Nothing in this port parks the hart in `wfi` instead.
+ *
+ * Without a debugger the ebreak is an ordinary breakpoint exception. The
  * port's trap handler recognises the sequence, skips it and marks
  * semihosting absent (a0 = -1), so a semihosted build run bare does not
- * fault on its first character -- the same guard the Cortex-M port has in
- * debug-host.h.
- *
- * Copyright (c) 2026 Dan. MIT license.
+ * fault on its first character.
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 extern "C"
@@ -37,21 +48,23 @@ namespace semihosting
   {
     SYS_WRITEC = 0x03,
     SYS_WRITE0 = 0x04,
+    SYS_WRITE = 0x05,
     SYS_EXIT = 0x18,
   };
 
   // ADP_Stopped_ApplicationExit
   inline constexpr std::uint64_t ADP_STOPPED_APPLICATION_EXIT = 0x20026;
 
+  // The trap: a0 = operation, a1 = parameter; returns a0.
   inline long __attribute__ ((noinline))
-  call (long operation, const void* arg)
+  call (long operation, const volatile void* arg) noexcept
   {
     if (riscv_semihosting_absent)
       {
         return -1;
       }
     register long a0 __asm__ ("a0") = operation;
-    register const void* a1 __asm__ ("a1") = arg;
+    register const volatile void* a1 __asm__ ("a1") = arg;
     __asm__ volatile(".option push\n"
                      ".option norvc\n"
                      ".balign 16\n"
@@ -65,47 +78,79 @@ namespace semihosting
     return a0;
   }
 
+  // False once a call has found no debugger behind it.
   inline bool
-  attached (void)
+  attached (void) noexcept
   {
     return !riscv_semihosting_absent;
   }
 
+  // SYS_WRITEC (0x03): write the single char pointed to by a1.
   inline void
-  write0 (const char* s)
+  write_char (char c) noexcept
+  {
+    volatile char ch = c;
+    call (SYS_WRITEC, &ch);
+  }
+
+  // SYS_WRITE0 (0x04): write the NUL-terminated string pointed to by a1.
+  inline void
+  write_str (const char* s) noexcept
   {
     call (SYS_WRITE0, s);
   }
 
+  // SYS_WRITE (0x05): write len bytes from buf to the console handle (1), so
+  // the buffer need not be NUL-terminated. a1 points to { handle, buf, len }.
   inline void
-  writec (char c)
+  write_buf (const char* buf, std::size_t len) noexcept
   {
-    call (SYS_WRITEC, &c);
+    volatile std::uint64_t block[3]
+        = { 1, reinterpret_cast<std::uint64_t> (buf), len };
+    call (SYS_WRITE, block);
   }
 
-  // RV64 is a 64-bit target: SYS_EXIT takes a two-word parameter block.
+  // SYS_EXIT (0x18): stop the run and report a status to the host. a1 points
+  // to { reason, exit_status }. Does not return under a debugger/emulator;
+  // without one, spins (never `wfi`).
   [[noreturn]] inline void
-  exit (int code)
+  exit (std::uint64_t reason, std::uint64_t status) noexcept
   {
-    const std::uint64_t block[2]
-        = { ADP_STOPPED_APPLICATION_EXIT,
-            static_cast<std::uint64_t> (static_cast<std::int64_t> (code)) };
+    volatile std::uint64_t block[2] = { reason, status };
     call (SYS_EXIT, block);
     for (;;)
       {
-        __asm__ volatile("wfi");
+        __asm__ volatile("" ::: "memory");
       }
   }
 
   [[noreturn]] inline void
-  exit_success (void)
+  exit_success () noexcept
   {
-    exit (0);
+    exit (ADP_STOPPED_APPLICATION_EXIT, 0);
   }
 
   [[noreturn]] inline void
-  exit_failure (void)
+  exit_failure () noexcept
   {
-    exit (1);
+    exit (ADP_STOPPED_APPLICATION_EXIT, 1);
+  }
+
+  // The verdict-and-stop used by a hardware test, as in the C++ ports: print
+  // the RESULT line on the semihosting channel (that is what reaches the
+  // OpenOCD log the runner reads), then SYS_EXIT, which stops the run.
+  [[noreturn]] inline void
+  report_result (bool pass) noexcept
+  {
+    if (pass)
+      {
+        write_str ("\nRESULT: PASS\n");
+        exit_success ();
+      }
+    else
+      {
+        write_str ("\nRESULT: FAIL\n");
+        exit_failure ();
+      }
   }
 } // namespace semihosting

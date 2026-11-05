@@ -2,7 +2,7 @@
  * board.cpp -- Milk-V Duo start-up hooks for the RISC-V port.
  *
  * What runs before µOS++ on this board: boot ROM -> minimal fip (BL2: clocks,
- * DDR, UART4 + JTAG pinmux) -> OpenSBI + test payload, parked in wfi. OpenOCD
+ * DDR, UART4 + JTAG pinmux) -> OpenSBI + test payload, parked. OpenOCD
  * then halts the hart, loads the test into DDR and starts it at _start in
  * M-mode (hw.sh). So the clocks, DDR and the console are already up; the
  * board only has to make sure nothing OpenSBI left armed can fire.

@@ -37,6 +37,10 @@ extern "C"
   extern volatile uint32_t riscv_trap_nesting;
   // rdtime value at the last system tick (src/rtos/os-core.cpp).
   extern volatile uint64_t riscv_port_last_tick;
+  // A context switch requested by a thread while mstatus.MIE was clear
+  // (src/rtos/os-core.cpp); done when the critical section ends.
+  extern volatile bool riscv_port_yield_deferred;
+  void riscv_port_deferred_yield (void);
 }
 
 namespace os
@@ -52,7 +56,7 @@ namespace os
         {
           // PORT_GREETING names the board; board.cmake defines it.
           trace::printf ("Scheduler: " PORT_GREETING
-                         ", RV64 M-mode, preemptive, %u Hz tick, MSIP switch\n",
+                         ", RV64 M-mode, preemptive, %u Hz tick, ecall switch\n",
                          static_cast<unsigned> (OS_INTEGER_SYSTICK_FREQUENCY_HZ));
           trace::printf ("Timebase: %u Hz\n",
                          static_cast<unsigned> (riscv_board::TIMEBASE_HZ));
@@ -76,12 +80,16 @@ namespace os
           return lock_state != state::unlocked;
         }
 
+        // The idle thread does NOT sleep in `wfi`: it returns at once and
+        // the idle loop spins, preempted by the tick and by MSIP. On the
+        // C906 a hart in `wfi` was measured not taking a pending, enabled
+        // machine-timer interrupt (mos-test1 stopped after 25 ms, the hart
+        // on the instruction after `wfi`, mip.MTIP=1, mie.MTIE=1,
+        // mstatus.MIE=1). A spin costs power, not correctness.
         inline void __attribute__ ((always_inline))
         wait_for_interrupt (void)
         {
-#if !defined(OS_EXCLUDE_RTOS_IDLE_SLEEP)
-          __asm__ volatile("fence iorw, iorw\n\twfi" ::: "memory");
-#endif
+          __asm__ volatile("" ::: "memory");
         }
       } /* namespace scheduler */
 
@@ -111,6 +119,12 @@ namespace os
           if (state & riscv::csr::MSTATUS_MIE)
             {
               riscv::csr::mstatus_set_mie ();
+              // What PRIMASK clearing does for a pending PendSV on
+              // Cortex-M: a switch asked for inside the section happens now.
+              if (riscv_port_yield_deferred)
+                {
+                  riscv_port_deferred_yield ();
+                }
             }
         }
 

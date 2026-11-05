@@ -5,8 +5,9 @@
  * RESULT line on SYS_WRITE0, the exit code on SYS_EXIT), so the channel is
  * tested on its own rather than only as a side effect:
  *
- *   SYS_WRITEC   one character
- *   SYS_WRITE0   a string, including one longer than a UART FIFO
+ *   SYS_WRITEC   one character                   (write_char)
+ *   SYS_WRITE0   a string, one longer than a FIFO  (write_str)
+ *   SYS_WRITE    a buffer that is not NUL-terminated (write_buf)
  *   SYS_TIME     the host's clock answers (non-zero), so the call RETURNED
  *                a value and a0 came back through the trap
  *   SYS_ERRNO    a second value-returning call
@@ -48,14 +49,17 @@ os_main (int, char*[])
       hw_result::fail ();
     }
 
-  semihosting::writec ('[');
-  semihosting::writec ('c');
-  semihosting::writec (']');
-  semihosting::writec ('\n');
-  semihosting::write0 ("semihosting SYS_WRITE0 from a RISC-V hart\n");
-  semihosting::write0 (
+  semihosting::write_char ('[');
+  semihosting::write_char ('c');
+  semihosting::write_char (']');
+  semihosting::write_char ('\n');
+  semihosting::write_str ("semihosting SYS_WRITE0 from a RISC-V hart\n");
+  semihosting::write_str (
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n");
+
+  semihosting::write_buf ("SYS_WRITE: 13 bytes of this", 13);
+  semihosting::write_char ('\n');
 
   const long t = semihosting::call (SYS_TIME, nullptr);
   const long e = semihosting::call (SYS_ERRNO, nullptr);

@@ -54,5 +54,10 @@ inline constexpr unsigned CTX_GP = 3;
 inline constexpr unsigned CTX_TP = 4;
 inline constexpr unsigned CTX_A0 = 10;
 inline constexpr unsigned CTX_A1 = 11;
+inline constexpr unsigned CTX_A7 = 17;
+
+// a7 of the port's own ecall (os-core.cpp riscv_port_yield): "switch
+// threads". Any other ecall is an application's (riscv_trap_exception_hook).
+inline constexpr std::uint64_t RISCV_PORT_YIELD_ECALL = 0x55'4F'53'59ULL; // "YSOU"
 
 #endif

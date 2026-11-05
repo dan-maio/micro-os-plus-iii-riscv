@@ -29,7 +29,7 @@ os_terminate (int code)
   (void) code;
   for (;;)
     {
-      __asm__ volatile("wfi");
+      __asm__ volatile("" ::: "memory");
     }
 }
 

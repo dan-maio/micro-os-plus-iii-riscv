@@ -1,13 +1,13 @@
 /*
  * soft-irq.cpp -- software interrupt lines on the machine software interrupt.
  *
- * A RISC-V hart has no NVIC, and its one software-triggered interrupt (CLINT
- * MSIP) is already the port's context-switch request. Lines 0..31 are
- * multiplexed onto it: NVIC_SetPendingIRQ(n) marks line n and raises MSIP;
- * the MSIP trap (trap.cpp) first runs every pending, enabled line's handler
+ * A RISC-V hart has no NVIC; its one software-triggered interrupt is CLINT
+ * MSIP (the port switches threads with ecall, not with MSIP). Lines 0..31
+ * are multiplexed onto it: NVIC_SetPendingIRQ(n) marks line n and raises
+ * MSIP; the MSIP trap (trap.cpp) runs every pending, enabled line's handler
  * IN HANDLER MODE -- interrupts masked, riscv_trap_nesting != 0, so the RTOS
- * ISR-safe calls behave as they do in any interrupt -- and only then
- * switches threads, if a reschedule is pending.
+ * ISR-safe calls behave as they do in any interrupt -- and on the way out
+ * switches threads, if a handler made one due.
  *
  * The NVIC names are what Cortex-M code calls (the CMSIS-RTOS validator
  * raises "IRQ 0" this way, cmsis_device.h declares them). A user of a line
@@ -21,11 +21,13 @@
 
 #include <clint.hpp>
 #include <cmsis_device.h>
+#include <riscv-csr.hpp>
 
 extern "C"
 {
   volatile std::uint32_t riscv_soft_irq_enabled = 0;
   volatile std::uint32_t riscv_soft_irq_pending = 0;
+  extern volatile std::uint32_t riscv_trap_nesting; // trap.S
 
   void __attribute__ ((weak)) riscv_soft_irq_handler (unsigned line)
   {
@@ -70,6 +72,22 @@ NVIC_SetPendingIRQ (IRQn_Type n)
   if (riscv_soft_irq_enabled & bit (n))
     {
       clint::msip_set ();
+      // On Cortex-M the handler of an enabled line has run before the
+      // instruction after the request (interrupts enabled, after a barrier).
+      // The CLINT write is posted and the C906 takes MSIP some cycles
+      // later, so from a thread with interrupts enabled wait for the
+      // dispatcher to have taken the line. (Masked or in a handler: it runs
+      // when interrupts are unmasked / the trap returns, as on Cortex-M.)
+      if (riscv_trap_nesting == 0
+          && (RISCV_CSR_READ (mstatus) & riscv::csr::MSTATUS_MIE) != 0)
+        {
+          (void) clint::msip_read ();
+          while ((__atomic_load_n (&riscv_soft_irq_pending, __ATOMIC_ACQUIRE)
+                  & riscv_soft_irq_enabled & bit (n))
+                 != 0)
+            {
+            }
+        }
     }
 }
 

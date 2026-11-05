@@ -4,13 +4,14 @@
  * Every interrupt and exception comes here. The frame (port_ctx.hpp) is
  * built on the stack that was interrupted -- the running thread's -- and
  * the C dispatcher runs on the interrupt stack. The dispatcher returns the
- * frame to resume: the same one, or, for the machine software interrupt
- * (MSIP, the context-switch request), the incoming thread's. Restoring from
- * a different frame IS the context switch.
+ * frame to resume: the same one, or the incoming thread's (a thread's yield
+ * ecall, or a trap that made another thread due). Restoring from a
+ * different frame IS the context switch.
  *
  * Interrupts stay masked for the whole trap (mstatus.MIE is cleared by the
- * hardware on entry and comes back from MPIE on mret), so traps never nest
- * and riscv_trap_nesting is 0 or 1. It is what in_handler_mode() reads.
+ * hardware on entry and comes back from MPIE on mret), so interrupts never
+ * nest; only an exception inside a handler can (nesting 2), and such a trap
+ * never switches. riscv_trap_nesting is what in_handler_mode() reads.
  *
  * Copyright (c) 2026 Dan. MIT license.
  */

@@ -20,7 +20,7 @@ NVIC_SystemReset (void)
 {
   for (;;)
     {
-      __asm__ volatile("wfi");
+      __asm__ volatile("" ::: "memory");
     }
 }
 

@@ -10,8 +10,12 @@
  *     clint@74000000 { compatible = "riscv,clint0"; clint,has-no-64bit-mmio; }
  *     plic0: interrupt-controller@70000000 { reg = <0x70000000 0x4000000>; }
  *   opensbi lib/utils/timer/fdt_timer_clint.c
- *     { .addr = 0x74000000, .has_64bit_mmio = 0 }  -> mtime/mtimecmp as two
- *     32-bit halves; mtime at +0xBFF8 (lib/utils/sys/clint.c)
+ *     { .addr = 0x74000000, .has_64bit_mmio = 0 }  -> mtimecmp as two
+ *     32-bit halves
+ *   measured on the board (2026-11-05): a load from mtime (+0xBFF8) is a
+ *     load access fault (mcause 5) -- even a 32-bit one. The cv1800 Eclipse
+ *     project had found the same; OpenSBI's generic driver would read it,
+ *     but the C906 does not implement it. Time comes from rdtime.
  *
  * Copyright (c) 2026 Dan. MIT license.
  */
@@ -30,6 +34,8 @@ namespace riscv_board
   inline constexpr std::uintptr_t CLINT_MTIME = CLINT_BASE + 0xBFF8u;
   // clint,has-no-64bit-mmio
   inline constexpr bool MTIMECMP_SPLIT32 = true;
+  // mtime is not implemented on the C906: reading it faults (see above).
+  inline constexpr bool MTIME_READABLE = false;
 
   inline constexpr std::uint32_t TIMEBASE_HZ = 25000000u;
 

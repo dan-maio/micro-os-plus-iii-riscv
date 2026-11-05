@@ -61,6 +61,5 @@ _start:
 	call	main
 	call	exit
 
-3:	wfi
-	j	3b
+3:	j	3b
 	.size	_start, . - _start

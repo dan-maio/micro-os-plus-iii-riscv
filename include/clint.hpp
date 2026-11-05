@@ -65,6 +65,15 @@ namespace clint
     __asm__ volatile("fence o, i" ::: "memory");
   }
 
+  // Read MSIP back: a load from the device completes only after the earlier
+  // store to it has, so this waits out a posted write.
+  inline std::uint32_t
+  msip_read (void)
+  {
+    __asm__ volatile("fence o, i" ::: "memory");
+    return reg32 (riscv_board::CLINT_MSIP);
+  }
+
   inline void
   msip_clear (void)
   {
@@ -78,9 +87,10 @@ namespace clint
     return riscv::csr::rdtime ();
   }
 
-  // The CLINT's own mtime. On the C906 it is NOT readable with a 64-bit load
-  // (the access faults); OpenSBI reads it as two 32-bit halves
-  // (lib/utils/sys/clint.c, clint_time_rd32), and so does this.
+  // The CLINT's own mtime, where the board implements it
+  // (riscv_board::MTIME_READABLE). On the Milk-V Duo's C906 it does not: any
+  // load from it is an access fault, 32-bit halves included -- measured on
+  // the board, as the cv1800 Eclipse project had found. Never called there.
   inline std::uint64_t
   mtime_read (void)
   {
@@ -104,12 +114,18 @@ namespace clint
   }
 
   // mtime - rdtime. mtimecmp is compared against mtime, the port counts in
-  // rdtime, so a deadline is written as (rdtime deadline + offset). On both
-  // boards so far the two are the same counter and the offset is 0, but it
-  // is measured, not assumed: the cv1800 bring-up suspected otherwise.
+  // rdtime, so a deadline is written as (rdtime deadline + offset). Measured
+  // where mtime can be read (QEMU: a few ticks of sampling skew). Where it
+  // cannot (the C906), mtimecmp compares against the same system counter
+  // rdtime reads, so the offset is 0; clock-test checks the resulting tick
+  // against rdtime independently.
   inline std::int64_t
   measure_offset (void)
   {
+    if constexpr (!riscv_board::MTIME_READABLE)
+      {
+        return 0;
+      }
     const std::uint64_t t0 = now ();
     const std::uint64_t m = mtime_read ();
     const std::uint64_t t1 = now ();
