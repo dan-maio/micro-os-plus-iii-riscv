@@ -72,7 +72,7 @@ ELF="$(readlink -f "$ELF")"
 # than its own test's sources (another test's edit does not make it stale).
 STALE="$(find "$ROOT/src" "$ROOT/include" "$HERE" \
   "$ROOT/test/pico2/$APP" "$ROOT/test/pico2/include" "$ROOT/test/pico2/src" \
-  -type f -newer "$ELF" \( -name '*.cpp' -o -name '*.c' -o -name '*.S' -o -name '*.h' -o -name '*.hpp' -o -name '*.ld' \) | head -3)"
+  -type f -newer "$ELF" \( -name '*.cpp' -o -name '*.c' -o -name '*.S' -o -name '*.h' -o -name '*.hpp' -o -name '*.ld' \) 2>/dev/null | head -3)"
 if [[ -n "$STALE" ]]; then
   echo "hw.sh: $ELF is older than its sources -- rebuild first:" >&2
   echo "$STALE" | sed 's/^/  /' >&2
@@ -91,26 +91,56 @@ fi
 SCRIPTS="$(dirname "$OCD")/scripts"
 SPEED="${SPEED:-5000}"
 
+# Flash or RAM: an image whose entry is in SRAM (a `-ram` test, linker-
+# ram.ld) is loaded into RAM over the debugger and started there; nothing is
+# written to flash. Any other image is programmed into flash and booted.
+READELF="$(ls -d "$HOME"/.local/xPacks/@xpack-dev-tools/riscv-none-elf-gcc/*/.content/bin/riscv-none-elf-readelf 2>/dev/null | sort -V | tail -1)"
+READELF="${READELF:-riscv-none-elf-readelf}"
+ENTRY="$("$READELF" -h "$ELF" | awk '/Entry point address/ { print $4 }')"
+if [[ "$ENTRY" == 0x2* ]]; then
+  MODE=ram
+  SESSION=(
+    -c "init"
+    -c "reset init"
+    # verify_image runs a checksum algorithm in the work area: keep it in the
+    # image's NOLOAD heap, never over the loaded sections.
+    -c "rp2350.rv0 configure -work-area-phys 0x20078000 -work-area-size 0x8000"
+    -c "load_image \"$ELF\""
+    -c "verify_image \"$ELF\""
+    -c "targets rp2350.rv1"
+    -c "arm semihosting enable"
+    -c "targets rp2350.rv0"
+    -c "arm semihosting enable"
+    -c "reg pc $ENTRY"
+    -c "resume"
+  )
+else
+  MODE=flash
+  SESSION=(
+    -c "init"
+    -c "reset init"
+    -c "program \"$ELF\" verify"
+    -c "reset init"
+    -c "targets rp2350.rv1"
+    -c "arm semihosting enable"
+    -c "targets rp2350.rv0"
+    -c "arm semihosting enable"
+    -c "resume"
+  )
+fi
+
 LOGS="$BUILD/.hw-logs"; mkdir -p "$LOGS"
 LOG="$LOGS/${APP}.log"
 rm -f "$LOG"
 
-echo "== Pico 2 (RISC-V) : $APP =="
+echo "== Pico 2 (RISC-V) : $APP ($MODE, entry $ENTRY) =="
 
 "$OCD" -s "$SCRIPTS" \
   -f interface/cmsis-dap.cfg \
   -c "cmsis-dap vid_pid 0x2e8a 0x000c" \
   -c "adapter speed $SPEED" \
   -f target/rp2350-riscv.cfg \
-  -c "init" \
-  -c "reset init" \
-  -c "program \"$ELF\" verify" \
-  -c "reset init" \
-  -c "targets rp2350.rv1" \
-  -c "arm semihosting enable" \
-  -c "targets rp2350.rv0" \
-  -c "arm semihosting enable" \
-  -c "resume" \
+  "${SESSION[@]}" \
   > >(tee "$LOG") 2>&1 &
 OCD_PID=$!
 

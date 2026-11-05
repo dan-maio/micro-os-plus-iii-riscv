@@ -72,7 +72,7 @@ fi
 # on the board with an old build). Another test's edit does not count.
 STALE="$(find "$ROOT/src" "$ROOT/include" "$HERE" \
   "$ROOT/test/milkv-duo/$APP" "$ROOT/test/milkv-duo/include" "$ROOT/test/milkv-duo/src" \
-  -type f -newer "$(readlink -f "$ELF")" \( -name '*.cpp' -o -name '*.c' -o -name '*.S' -o -name '*.h' -o -name '*.hpp' -o -name '*.ld' \) | head -3)"
+  -type f -newer "$(readlink -f "$ELF")" \( -name '*.cpp' -o -name '*.c' -o -name '*.S' -o -name '*.h' -o -name '*.hpp' -o -name '*.ld' \) 2>/dev/null | head -3)"
 if [[ -n "$STALE" ]]; then
   echo "hw.sh: $ELF is older than its sources -- rebuild first:" >&2
   echo "$STALE" | sed 's/^/  /' >&2

@@ -6,11 +6,27 @@
 # was built for); the single-core ones run on one.
 # -----------------------------------------------------------------------------
 
-set (_pico2_smp_tests smp-test2 smp-test3 smp-test4 smp-test5 smp-test-ko smp-mat-test)
+set (_pico2_smp_tests smp-test2 smp-test3 smp-test4 smp-test5 smp-test-ko smp-mat-test
+     smp-mat-test-ram)
 
 # Tests that program RP2350 peripherals directly (TIMER0, SIO): hardware
 # only, as on the Cortex-M Pico 2 board.
-set (BOARD_TEST_HWD_ONLY smp-test3 smp-test4 smp-test5 smp-test-ko smp-mat-test)
+set (BOARD_TEST_HWD_ONLY smp-test0 smp-test3 smp-test4 smp-test5 smp-test-ko smp-mat-test
+     smp-mat-test-ram cmsis-os-validator-ram mutex-stress-ram rtos-apis-ram)
+
+# `<name>-ram`: the same program run from SRAM, loaded over the debugger
+# (linker-ram.ld; hw.sh switches to a RAM session when the image's entry is
+# in SRAM). Nothing is written to flash.
+function (board_test_linker _app _out)
+  if ("${_app}" MATCHES "-ram$")
+    set (${_out} "${UOS_BOARD_SRC_DIR}/linker-ram.ld" PARENT_SCOPE)
+  else ()
+    set (${_out} "" PARENT_SCOPE)
+  endif ()
+endfunction ()
+
+# Bare-metal probes: no kernel (micro-os-plus::riscv-bare), their own main().
+set (BOARD_TEST_NO_KERNEL smp-test0)
 
 function (board_test_qemu_libs _app _out)
   if (UOS_QEMU_STANDIN)
@@ -36,7 +52,8 @@ endfunction ()
 # The kernel's harness suites, built only under the kernel's harness
 # (platform riscv-pico2); single-core, as on the Cortex-M Pico 2.
 set (BOARD_TEST_HARNESS_SUITES
-     fp-switch mutex-stress rtos-apis cmsis-os-validator)
+     fp-switch mutex-stress rtos-apis cmsis-os-validator
+     mutex-stress-ram rtos-apis-ram cmsis-os-validator-ram)
 
 if (DEFINED PLATFORM_NAME AND NOT TARGET pico2-harness-suite)
   # What a harness platform gives a suite and a board app does not:
@@ -57,11 +74,13 @@ endif ()
 
 function (board_test_libs _app _out)
   if ("${_app}" IN_LIST BOARD_TEST_HARNESS_SUITES)
-    set (_l test::${_app} pico2-harness-suite)
-    if (_app STREQUAL "rtos-apis")
+    # A `-ram` suite is the same suite.
+    string (REGEX REPLACE "-ram$" "" _suite "${_app}")
+    set (_l test::${_suite} pico2-harness-suite)
+    if (_suite STREQUAL "rtos-apis")
       # Its POSIX I/O and FatFs tests run on the kernel's POSIX layer.
       list (APPEND _l xpacks::chan-fatfs micro-os-plus::iii-posix-io)
-    elseif (_app STREQUAL "cmsis-os-validator")
+    elseif (_suite STREQUAL "cmsis-os-validator")
       list (APPEND _l xpacks::arm-cmsis-os-validator)
     endif ()
     set (${_out} ${_l} PARENT_SCOPE)

@@ -22,7 +22,8 @@
 #
 # Exports:
 #   micro-os-plus::riscv            port + kernel + the selected board
-#   micro-os-plus::riscv-bare       the board alone (no kernel)
+#   micro-os-plus::riscv-bare       the board + start-up, trap entry and a
+#                                   kernel-free runtime (no kernel)
 #   micro-os-plus::riscv-qemu-virt  port + kernel + QEMU's virt machine, the
 #                                   stand-in for a board QEMU does not model
 # -----------------------------------------------------------------------------
@@ -154,6 +155,20 @@ function (uos_riscv_add_port _name _board_dir)
     target_link_libraries (${_name}-board-interface INTERFACE ${P_LIBS})
   endif ()
 
+  # Without the kernel (BOARD_TEST_NO_KERNEL): the board, the start-up and
+  # trap entry, and a kernel-free runtime (src/bare/runtime.cpp); the test
+  # support headers (hw_result.hpp) but not its board contract, which is
+  # about OS_NCPU and the scheduler.
+  add_library (${_name}-bare-interface INTERFACE)
+  target_sources (${_name}-bare-interface INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/startup.S"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/trap.S"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/bare/runtime.cpp")
+  target_link_libraries (${_name}-bare-interface INTERFACE
+    ${_name}-board-interface)
+  target_include_directories (${_name}-bare-interface INTERFACE
+    "$<TARGET_PROPERTY:micro-os-plus-iii-test-support-interface,INTERFACE_INCLUDE_DIRECTORIES>")
+
   add_library (${_name}-interface INTERFACE)
   target_sources (${_name}-interface INTERFACE ${_uos_riscv_port_sources})
   target_link_libraries (${_name}-interface INTERFACE
@@ -169,7 +184,7 @@ uos_riscv_add_port (micro-os-plus-iii-riscv "${UOS_BOARD_SRC_DIR}"
                     DEFINES ${UOS_BOARD_DEFINES}
                     LIBS ${UOS_BOARD_LIBS})
 add_library (micro-os-plus::riscv ALIAS micro-os-plus-iii-riscv-interface)
-add_library (micro-os-plus::riscv-bare ALIAS micro-os-plus-iii-riscv-board-interface)
+add_library (micro-os-plus::riscv-bare ALIAS micro-os-plus-iii-riscv-bare-interface)
 
 # The QEMU virt stand-in: generic RV64GC, no tuning for a particular core.
 uos_riscv_add_port (micro-os-plus-iii-riscv-qemu-virt

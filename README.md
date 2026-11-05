@@ -359,9 +359,29 @@ Pico 2 (Raspberry Pi Debug Probe), one run after the semihosting change:
 | mutex-stress (harness) | 1 | **PASS** | PASS |
 | rtos-apis (harness) | 1 | **PASS** (96 KiB arena, no FatFs) | PASS |
 | cmsis-os-validator (harness) | 1 | **PASS** | PASS |
+| smp-test0 (bare, no kernel) | 2 | **PASS** -- 5 KiB image, core 1 launched and blinking | hw only |
+| smp-mat-test-ram | 2 | **PASS** from SRAM | hw only |
+| mutex-stress-ram (harness) | 1 | **PASS** from SRAM | hw only |
+| rtos-apis-ram (harness) | 1 | **PASS** from SRAM | hw only |
+| cmsis-os-validator-ram (harness) | 1 | **PASS** from SRAM | hw only |
 
-13/13 on the board. Still to port: smp-test0 (bare, needs a kernel-less
-runtime in the port), the `-ram` variants, the two USB tests.
+18 of the 20 Cortex-M Pico 2 tests pass on the RISC-V Pico 2. Still to port:
+the two USB tests (smp-test-usb-cdc-acm, smp-test-usb-hid).
+
+**Bare runtime** (`micro-os-plus::riscv-bare`, for `BOARD_TEST_NO_KERNEL`):
+the board, `startup.S`, `trap.S` and `src/bare/runtime.cpp` -- start-up hooks
+that only bring the board up, the static constructors, `_exit` -> semihosting,
+and a trap dispatcher with semihosting, the exception hook, the board's
+external interrupts and the fault report (no tick, no switch); the test
+support headers without the board contract.
+
+**`-ram` tests**: `<name>-ram` is `<name>` linked by `linker-ram.ld`
+(everything in SRAM, no IMAGE_DEF, no `.data` copy). `hw.sh` picks the session
+from the image's entry: in SRAM -> `reset init`, OpenOCD's work area moved
+into the image's NOLOAD heap (0x20078000), `load_image`, `verify_image`,
+`reg pc <entry>` on core 0, semihosting on both, `resume`; core 1 stays in
+the boot ROM until launched. Nothing is written to flash (smp-mat-test-ram:
+92 KiB loaded in 0.66 s).
 
 Porting changes: `bsp/` headers -> the board's; Arm idle `dsb`/`wfi` -> yield
 only; `dmb`/`__DMB` -> `fence rw, rw`; smp-mat-test's configuration-error
