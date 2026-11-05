@@ -15,3 +15,51 @@
 function (board_test_qemu_libs _app _out)
   set (${_out} micro-os-plus::riscv-qemu-virt PARENT_SCOPE)
 endfunction ()
+
+# -----------------------------------------------------------------------------
+# The harness suites.
+#
+# They are not board tests: their sources live in the kernel's harness,
+# tests/sources/<suite>/, and the directory under test/milkv-duo/ carries
+# only the name and the verdict (harness-suite.cpp). The harness platform
+# (tests/platforms/riscv-milkv-duo) add_subdirectory()s those sources into
+# test::<suite>; naming that library here brings its sources AND its own
+# cmsis-plus/os-app-config.h, which the port's os-app-config.h hands over to
+# (UOS_HARNESS_SUITE). The same arrangement as the Nucleo-F411RE and the
+# Raspberry Pi boards.
+#
+# The suites run under the kernel's scalar (non-SMP) scheduler: this port
+# has one hart.
+set (BOARD_TEST_HARNESS_SUITES
+     blinky fp-switch mutex-stress instrumentation rtos-apis cmsis-os-validator)
+
+if (DEFINED PLATFORM_NAME AND NOT TARGET milkv-duo-harness-suite)
+  # What a harness platform gives a suite and a board app does not:
+  #   OS_USE_OS_APP_CONFIG_H  the kernel reads the suite's os-app-config.h
+  #                           only under it;
+  #   the platform include    that file includes cmsis-plus/platform.h,
+  #                           which is the harness platform's;
+  #   --wrap=os_main          harness-suite.cpp defines __wrap_os_main(): run
+  #                           the suite, print the RESULT line, end the run.
+  add_library (milkv-duo-harness-suite INTERFACE)
+  target_compile_definitions (milkv-duo-harness-suite INTERFACE
+                              OS_USE_OS_APP_CONFIG_H UOS_HARNESS_SUITE
+                              _POSIX_C_SOURCE=200809L _GNU_SOURCE)
+  target_include_directories (milkv-duo-harness-suite INTERFACE
+                              "${CMAKE_SOURCE_DIR}/platforms/${PLATFORM_NAME}/include")
+  target_link_options (milkv-duo-harness-suite INTERFACE "-Wl,--wrap=os_main")
+endif ()
+
+function (board_test_libs _app _out)
+  if ("${_app}" IN_LIST BOARD_TEST_HARNESS_SUITES)
+    set (_l test::${_app} milkv-duo-harness-suite)
+    if (_app STREQUAL "rtos-apis")
+      list (APPEND _l xpacks::chan-fatfs)
+    elseif (_app STREQUAL "cmsis-os-validator")
+      list (APPEND _l xpacks::arm-cmsis-os-validator)
+    endif ()
+    set (${_out} ${_l} PARENT_SCOPE)
+  else ()
+    set (${_out} "" PARENT_SCOPE)
+  endif ()
+endfunction ()

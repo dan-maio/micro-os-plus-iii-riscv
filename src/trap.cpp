@@ -35,6 +35,21 @@ extern "C"
   {
   }
 
+  // An exception a test (or an application) wants to handle itself: return
+  // true after adjusting the frame (typically frame->x[0], mepc, past the
+  // faulting instruction); false lets the port report it as a fault.
+  // exc-test is the user: it provokes illegal-instruction, ecall and
+  // misaligned/access exceptions and proves the trap entry survives them.
+  bool __attribute__ ((weak)) riscv_trap_exception_hook (ctx_t* frame,
+                                                         std::uint64_t mcause,
+                                                         std::uint64_t mtval)
+  {
+    (void) frame;
+    (void) mcause;
+    (void) mtval;
+    return false;
+  }
+
   void* riscv_trap_dispatch (ctx_t* frame);
 }
 
@@ -136,6 +151,11 @@ riscv_trap_dispatch (ctx_t* frame)
       riscv_semihosting_absent = true;
       frame->x[CTX_A0] = static_cast<std::uint64_t> (-1);
       frame->x[0] += 8;
+      return frame;
+    }
+
+  if (riscv_trap_exception_hook (frame, mcause, RISCV_CSR_READ (mtval)))
+    {
       return frame;
     }
 

@@ -179,6 +179,11 @@ uos_riscv_add_port (micro-os-plus-iii-riscv-qemu-virt
 add_library (micro-os-plus::riscv-qemu-virt
              ALIAS micro-os-plus-iii-riscv-qemu-virt-interface)
 
+# Standalone: this repository is the top-level build (its own test/ builder
+# registers CTest cases). Under the kernel's harness (tests/), the harness
+# platform registers them instead.
+set (UOS_RISCV_STANDALONE ${PROJECT_IS_TOP_LEVEL} CACHE INTERNAL "")
+
 set (UOS_PORT_LIB      micro-os-plus::riscv      CACHE INTERNAL "")
 set (UOS_PORT_BARE_LIB micro-os-plus::riscv-bare CACHE INTERNAL "")
 

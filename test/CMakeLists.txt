@@ -165,6 +165,11 @@ endfunction ()
 function (board_test_libs _app _out)
   set (${_out} "" PARENT_SCOPE)
 endfunction ()
+# Harness suites carried as board apps (a placeholder directory whose sources
+# are the harness's tests/sources/<suite>). They exist only when the kernel's
+# harness drives the build (PLATFORM_NAME is its); a standalone port build
+# skips them rather than build an application with no os_main().
+set (BOARD_TEST_HARNESS_SUITES "")
 if (EXISTS "${_test_dir}/tests.cmake")
   include ("${_test_dir}/tests.cmake")
 endif ()
@@ -192,6 +197,9 @@ foreach (_dir IN LISTS _test_dirs)
   endif ()
   file (GLOB _srcs CONFIGURE_DEPENDS "${_dir}/*.cpp")
   if (NOT _srcs)
+    continue ()
+  endif ()
+  if ("${_app}" IN_LIST BOARD_TEST_HARNESS_SUITES AND NOT DEFINED PLATFORM_NAME)
     continue ()
   endif ()
   list (APPEND _apps "${_app}")
@@ -340,6 +348,9 @@ math (EXPR _n "${_n} * ${_nv}")
 # desk, carry the label hwd and are excluded with `ctest -LE hwd` (the
 # emulated set); run them by name, one per power cycle (hw.sh).
 foreach (_app IN LISTS _apps)
+  if (NOT UOS_RISCV_STANDALONE)
+    break () # the harness platform registers the cases
+  endif ()
   set (_app_variants ${_variants})
   if ("${_app}" IN_LIST BOARD_TEST_HWD_ONLY)
     set (_app_variants hwd)
