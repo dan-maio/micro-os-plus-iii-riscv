@@ -59,7 +59,7 @@ namespace
   std::uint64_t*
   table_of (std::uint64_t pte)
   {
-    return reinterpret_cast<std::uint64_t*> ((pte >> 10) << 12);
+    return reinterpret_cast<std::uint64_t*> (((pte & mmu::PTE_PPN_MASK) >> 10) << 12);
   }
 } // namespace
 
@@ -130,14 +130,14 @@ namespace mmu
       }
     if (l2 & (PTE_R | PTE_W | PTE_X))
       {
-        return ((l2 >> 10) << 12) + (va & ((1ULL << 30) - 1));
+        return (((l2 & mmu::PTE_PPN_MASK) >> 10) << 12) + (va & ((1ULL << 30) - 1));
       }
     const std::uint64_t l1 = table_of (l2)[vpn1 (va)];
     if (!(l1 & PTE_V))
       {
         return ~0ULL;
       }
-    return ((l1 >> 10) << 12) + (va & (MEGAPAGE - 1));
+    return (((l1 & mmu::PTE_PPN_MASK) >> 10) << 12) + (va & (MEGAPAGE - 1));
   }
 
   void

@@ -41,16 +41,24 @@ namespace riscv_board
 
   inline constexpr std::uintptr_t PLIC_BASE = 0x70000000u;
 
+  // C906 extended PTE attributes (mxstatus.MAEE = 1, set by BL2; mmu.hpp).
+  inline constexpr std::uint64_t PTE_ATTR_RAM
+      = mmu::PTE_THEAD_C | mmu::PTE_THEAD_B | mmu::PTE_THEAD_SH;
+  inline constexpr std::uint64_t PTE_ATTR_DEV
+      = mmu::PTE_THEAD_SO | mmu::PTE_THEAD_SH;
+  inline constexpr std::uint64_t FLAGS_RAM = mmu::FLAGS_RAM | PTE_ATTR_RAM;
+  inline constexpr std::uint64_t FLAGS_DEV = mmu::FLAGS_DEV | PTE_ATTR_DEV;
+
   // Sv39 identity map (mmu.hpp). The MMIO windows are those of the cv1800
   // Eclipse project's mmu.c; DRAM is the Duo's 64 MiB.
   inline constexpr mmu::region MMU_REGIONS[] = {
-    { 0x03000000u, 0x00200000u, mmu::FLAGS_DEV }, // TOP: pinmux, clk, rst, GPIO
-    { 0x04000000u, 0x01000000u, mmu::FLAGS_DEV }, // HSPERI: UART, SD, USB
-    { 0x05000000u, 0x00400000u, mmu::FLAGS_DEV }, // RTC domain
-    { 0x0E000000u, 0x00200000u, mmu::FLAGS_DEV }, // AXI SRAM
-    { 0x70000000u, 0x00400000u, mmu::FLAGS_DEV }, // PLIC
-    { 0x74000000u, 0x00200000u, mmu::FLAGS_DEV }, // CLINT
-    { 0x80000000u, 0x04000000u, mmu::FLAGS_RAM }, // DDR2, 64 MiB
+    { 0x03000000u, 0x00200000u, FLAGS_DEV }, // TOP: pinmux, clk, rst, GPIO
+    { 0x04000000u, 0x01000000u, FLAGS_DEV }, // HSPERI: UART, SD, USB
+    { 0x05000000u, 0x00400000u, FLAGS_DEV }, // RTC domain
+    { 0x0E000000u, 0x00200000u, FLAGS_DEV }, // AXI SRAM
+    { 0x70000000u, 0x00400000u, FLAGS_DEV }, // PLIC
+    { 0x74000000u, 0x00200000u, FLAGS_DEV }, // CLINT
+    { 0x80000000u, 0x04000000u, FLAGS_RAM }, // DDR2, 64 MiB
   };
 } // namespace riscv_board
 

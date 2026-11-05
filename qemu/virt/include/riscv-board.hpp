@@ -34,11 +34,15 @@ namespace riscv_board
 
   inline constexpr std::uintptr_t PLIC_BASE = 0x0C000000u;
 
+  // Standard Sv39: no vendor PTE attributes (bits 63..54 must be 0).
+  inline constexpr std::uint64_t FLAGS_RAM = mmu::FLAGS_RAM;
+  inline constexpr std::uint64_t FLAGS_DEV = mmu::FLAGS_DEV;
+
   inline constexpr mmu::region MMU_REGIONS[] = {
-    { 0x02000000u, 0x00200000u, mmu::FLAGS_DEV }, // CLINT
-    { 0x0C000000u, 0x00400000u, mmu::FLAGS_DEV }, // PLIC
-    { 0x10000000u, 0x00200000u, mmu::FLAGS_DEV }, // UART0 and friends
-    { 0x80000000u, 0x08000000u, mmu::FLAGS_RAM }, // 128 MiB
+    { 0x02000000u, 0x00200000u, FLAGS_DEV }, // CLINT
+    { 0x0C000000u, 0x00400000u, FLAGS_DEV }, // PLIC
+    { 0x10000000u, 0x00200000u, FLAGS_DEV }, // UART0 and friends
+    { 0x80000000u, 0x08000000u, FLAGS_RAM }, // 128 MiB
   };
 } // namespace riscv_board
 

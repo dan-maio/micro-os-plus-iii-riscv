@@ -72,7 +72,28 @@ The port's `ecall` marker in `a7` is consumed by the trap handler (`a7`
 comes back 0), so an application's own `ecall` (`exc-test`) is never taken
 for a yield. Idle never executes `wfi` (`wait_for_interrupt()` is empty).
 
-The tick is re-armed on a fixed grid of `rdtime` deadlines.
+The tick is re-armed on a fixed grid of `rdtime` deadlines, before the
+handler. **After** the handler, `riscv_port_tick_guard()` checks the
+deadline again: if the handler itself ran past it (a slow timer callback),
+the next tick is set one full period from now, so threads always get at least
+one period between ticks. Measured on the Duo without it: `rtos-apis`'
+1-tick periodic timer, whose callback `printf`s, kept the hart inside the
+tick trap for ever (the next tick was pending before `mret`), and `main`
+never ran again.
+
+On the board the console is copied to semihosting **from threads only**. A
+semihosting call halts the hart for a JTAG round trip (tens of ms), so output
+written inside a trap (a timer callback's `printf`) goes to the UART only.
+Verdict lines and exits are written from threads.
+
+**MMU attributes (C906).** BL2 sets `mxstatus = 0xc0638000`, which includes
+MAEE (bit 21): the C906 then reads PTE bits 63..59 as memory attributes
+(SO, C, B, SH, Sec). With them at 0 a RAM page is non-cacheable: accesses
+through the MMU bypass the D-cache that untranslated M-mode accesses use
+(measured: `mmu-test` failed on the Duo, passed on QEMU). The board supplies
+the values the SDK's Linux uses (`arch/riscv/include/asm/pgtable*.h`):
+RAM = `C|B|SH`, devices = `SO|SH` (`riscv_board::FLAGS_RAM/_DEV`). The QEMU
+board keeps 0: on a standard Sv39 hart those bits are reserved.
 
 Semihosting is the `slli/ebreak/srai` sequence; without a debugger the trap
 handler skips it (a0 = -1) instead of faulting. The kernel's "embedded" code
@@ -90,6 +111,7 @@ loads/stores translated as S-mode), including a non-identity alias.
 | timebase | 25 MHz (`cv180x_base_riscv.dtsi`) |
 | CLINT | `0x74000000`, **32-bit MMIO only** (`clint,has-no-64bit-mmio`); `mtimecmp` written as split 32-bit halves. **`mtime` (+0xBFF8) is not readable from M-mode** -- measured: load access fault (mcause 5), also with 32-bit loads; the port uses `rdtime` only (`MTIME_READABLE = false`) |
 | PLIC | `0x70000000` |
+| `mxstatus` | `0xc0638000` written by BL2: MAEE on (PTE bits 63..59 are T-Head attributes) |
 | console | UART4 `0x041C0000`, header pins 4 (TX) / 5 (RX), 115200 8N1 (set by BL2) |
 | LED | GPIOC (`0x03022000`) bit 24 (Linux GPIO 440) |
 | JTAG | TDI 1, TDO 2, TMS 16, TCK 17, GND 18; IDCODE `0x10000b6f` (T-Head/C-SKY), 1 MHz. Measured: the first OpenOCD attach after a previous session fails (IR capture / `dtmcontrol` 0), the second works -- `hw.sh` retries |
@@ -223,16 +245,31 @@ logs show `!PASSED` in several runs). Not yet root-caused.
 
 QEMU after the `ecall` switch: port tree 8/8, harness release 14/14.
 
-Hardware, Milk-V Duo, port tree (`test/hw.sh`), after the `ecall` switch:
+Hardware, Milk-V Duo, full run (`hw-all.sh`, `RESET=wdt`), after the `ecall`
+switch:
 
-| test | result |
-|---|---|
-| smp_test0 | **PASS**, exit 0 -- 10 heartbeats, 1004.5 ms apart |
-| mos-test1 | **PASS**, exit 0 -- 10 threads, 65 producer/consumer handoffs |
-| the others | not yet run on the board |
+| test | port tree | harness |
+|---|---|---|
+| blinky | -- | PASS |
+| clock-test | PASS | PASS |
+| cmsis-os-validator | -- | PASS (all cases) |
+| exc-test | PASS | PASS |
+| fp-switch | -- | PASS |
+| instrumentation | -- | PASS |
+| mmu-test | FAIL -> fixed (MAEE attributes) | FAIL -> fixed |
+| mos-test1 | PASS | PASS |
+| mutex-ceiling-test | PASS | PASS |
+| mutex-stress | -- | PASS |
+| rtos-apis | -- | hung in the tick trap -> fixed (tick guard, no semihosting in traps) |
+| sc-test-ko | PASS | not run (watchdog reset failed after the hang) |
+| semihosting-test | FAIL -> fixed (test: OpenOCD's SYS_ERRNO starts at -1) | -- |
+| smp_test0 | PASS | not run |
 
-Before the switch rewrite both stopped at their first blocking call (the MSIP
-window described under *The port*).
+The fixes pass on QEMU (port 8/8, harness 14/14); the board rerun of the
+fixed and unrun tests follows.
+
+Before the switch rewrite every blocking test stopped at its first blocking
+call (the MSIP window described under *The port*).
 
 ### What the RISC-V port found in the shared code
 

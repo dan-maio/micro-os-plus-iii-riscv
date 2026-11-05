@@ -32,8 +32,10 @@ extern "C"
 
   volatile bool riscv_semihosting_absent = false;
 
-  // Defined in os-core.cpp: re-arm mtimecmp for the next tick.
+  // Defined in os-core.cpp: re-arm mtimecmp for the next tick, and push it
+  // out again if the handler overran it.
   void riscv_port_tick_rearm (void);
+  void riscv_port_tick_guard (void);
 
   // soft-irq.cpp: run the pending, enabled software interrupt lines.
   void riscv_soft_irq_dispatch (void);
@@ -162,6 +164,7 @@ riscv_trap_dispatch (ctx_t* frame)
         case riscv::csr::IRQ_M_TIMER:
           riscv_port_tick_rearm ();
           os_systick_handler ();
+          riscv_port_tick_guard ();
           return trap_exit (frame);
 
         case riscv::csr::IRQ_M_EXT:

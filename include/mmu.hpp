@@ -33,8 +33,27 @@ namespace mmu
   inline constexpr std::uint64_t PTE_A = 1ULL << 6;
   inline constexpr std::uint64_t PTE_D = 1ULL << 7;
 
+  // T-Head C906 extended attributes, PTE bits 63..59. They apply when
+  // mxstatus.MAEE = 1 -- which the Duo's BL2 sets (mxstatus = 0xc0638000).
+  // Values as the SDK's Linux uses them (arch/riscv/include/asm/
+  // pgtable-bits.h, pgtable.h): RAM = Cacheable|Bufferable|Shareable,
+  // I/O = Strong-order|Shareable. Left at 0, a RAM page is NON-cacheable:
+  // translated accesses then bypass the D-cache that untranslated M-mode
+  // accesses go through (measured: mmu-test failed on the Duo). On a
+  // standard Sv39 hart these bits are reserved and must stay 0, so they
+  // come from the board (riscv_board::PTE_ATTR_RAM / _DEV).
+  inline constexpr std::uint64_t PTE_THEAD_SEC = 1ULL << 59;
+  inline constexpr std::uint64_t PTE_THEAD_SH = 1ULL << 60;
+  inline constexpr std::uint64_t PTE_THEAD_B = 1ULL << 61;
+  inline constexpr std::uint64_t PTE_THEAD_C = 1ULL << 62;
+  inline constexpr std::uint64_t PTE_THEAD_SO = 1ULL << 63;
+
+  // The PPN field, bits 53..10.
+  inline constexpr std::uint64_t PTE_PPN_MASK = ((1ULL << 44) - 1) << 10;
+
   // A and D are set up front: the C906 does not update them in hardware and
-  // would page-fault on the first access instead.
+  // would page-fault on the first access instead. Board attributes are
+  // added by the board's MMU_REGIONS (riscv-board.hpp).
   inline constexpr std::uint64_t FLAGS_RAM = PTE_R | PTE_W | PTE_X | PTE_A | PTE_D;
   inline constexpr std::uint64_t FLAGS_DEV = PTE_R | PTE_W | PTE_A | PTE_D;
 

@@ -62,6 +62,7 @@ extern "C"
   // mtime - rdtime, measured once when the tick starts (clint.hpp).
   volatile std::int64_t riscv_port_clint_offset = 0;
   void riscv_port_tick_rearm (void);
+  void riscv_port_tick_guard (void);
 
   volatile bool riscv_port_yield_deferred = false;
   void riscv_port_yield (void);
@@ -121,6 +122,26 @@ riscv_port_tick_rearm (void)
     }
   clint::mtimecmp_write (next_tick
                          + static_cast<std::uint64_t> (riscv_port_clint_offset));
+}
+
+// Called AFTER the tick handler. If the handler itself ran past the next
+// deadline (a timer callback that is slow, e.g. a semihosting write, which
+// halts the hart for a JTAG round trip), the next tick would be taken right
+// after mret and no thread would ever run again -- measured on the Duo with
+// rtos-apis' 1-tick periodic timer: the hart lived in the tick trap. So the
+// next deadline is moved to one full period from now: threads always get
+// at least one period between ticks. The ticks lost are lost, as after any
+// halt.
+void
+riscv_port_tick_guard (void)
+{
+  const std::uint64_t now = clint::now ();
+  if (next_tick <= now)
+    {
+      next_tick = now + tick_period;
+      clint::mtimecmp_write (
+          next_tick + static_cast<std::uint64_t> (riscv_port_clint_offset));
+    }
 }
 
 namespace os

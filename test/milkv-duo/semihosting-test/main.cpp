@@ -79,7 +79,11 @@ os_main (int, char*[])
                  t, t_last, e, static_cast<unsigned long> (dk));
   uart::write (b);
 
-  const bool ok = t > 0 && t_last >= t && e >= 0 && dk >= 100;
+  // SYS_ERRNO: any value. It is the host's last errno, and its initial value
+  // is the host's choice: QEMU 0, OpenOCD -1 (semihosting_common.c sets
+  // sys_errno = -1 at start). The call returning at all is what is tested.
+  (void) e;
+  const bool ok = t > 0 && t_last >= t && dk >= 100;
   if (ok)
     {
       uart::write ("RESULT: PASS (semihosting-test)\n");

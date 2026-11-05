@@ -19,6 +19,7 @@
 
 #if defined(HW_BUILD) && defined(SEMIHOST)
 #include <semihosting.hpp>
+extern "C" volatile std::uint32_t riscv_trap_nesting; // trap.S
 #endif
 
 namespace
@@ -63,10 +64,14 @@ namespace
 #if defined(HW_BUILD) && defined(SEMIHOST)
   // Copy to semihosting in NUL-terminated chunks: one trap per chunk, not
   // one per character (each trap is a JTAG round trip).
+  // Not from a trap: each semihosting call halts the hart for a JTAG round
+  // trip (tens of ms), far longer than a tick. Output written by a handler
+  // (a timer callback's printf) goes to the UART only. Verdicts and exits
+  // are written from threads.
   void
   semi_copy (const char* s, std::size_t n)
   {
-    if (!semihosting::attached ())
+    if (!semihosting::attached () || riscv_trap_nesting != 0)
       {
         return;
       }

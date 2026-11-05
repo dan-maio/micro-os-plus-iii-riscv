@@ -97,7 +97,7 @@ os_main (int, char*[])
   // 4.
   {
     constexpr std::uint64_t VA = 0x40000000ULL;
-    bool ok = mmu::map_2m (VA, pa, mmu::FLAGS_RAM);
+    bool ok = mmu::map_2m (VA, pa, riscv_board::FLAGS_RAM);
     ok &= mmu::translate (VA + 0x10) == pa + 0x10;
 
     phys (pa + 0x10) = 0;
