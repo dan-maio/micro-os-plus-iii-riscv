@@ -27,7 +27,8 @@ namespace riscv_board
   inline constexpr std::uintptr_t CLINT_MSIP = CLINT_BASE + 0x0000u;
   inline constexpr std::uintptr_t CLINT_MTIMECMP = CLINT_BASE + 0x4000u;
   inline constexpr std::uintptr_t CLINT_MTIME = CLINT_BASE + 0xBFF8u;
-  inline constexpr bool MTIMECMP_SPLIT32 = false;
+  // A 64-bit store is two stores on RV32: write the halves in the safe order.
+  inline constexpr bool MTIMECMP_SPLIT32 = (__riscv_xlen == 32);
   inline constexpr bool MTIME_READABLE = true;
 
   inline constexpr std::uint32_t TIMEBASE_HZ = 10000000u;

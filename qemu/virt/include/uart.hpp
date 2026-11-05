@@ -11,7 +11,11 @@
 #include <cstddef>
 #include <cstdint>
 
+#if __riscv_xlen == 64
 #define PORT_BANNER_LONG "QEMU virt (RV64GC)"
+#else
+#define PORT_BANNER_LONG "QEMU virt (RV32IMAC, Hazard3 code)"
+#endif
 #define PORT_BANNER_SHORT "QEMU virt"
 #define PORT_BANNER_ISA "RV64GC"
 #define PORT_BANNER_CPU "rv64"

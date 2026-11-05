@@ -1,11 +1,13 @@
 # micro-os-plus-iii-riscv
 
-The **RISC-V port of µOS++ III**: RV64GC, machine mode, one hart. The fourth
+The **RISC-V port of µOS++ III**: RV64 or RV32, with or without an FPU,
+machine mode, one hart (SMP in progress). The fourth
 architecture project beside `micro-os-plus-iii-cortexm`, `-aarch32` and
 `-aarch64`, built and tested the same way.
 
 First board: **Milk-V Duo (64 MB)** -- Sophgo CV1800B, T-Head C906 @ 850 MHz,
-64 MiB DDR2.
+64 MiB DDR2 (RV64GC). In progress: **Raspberry Pi Pico 2** (RP2350) on its two
+Hazard3 cores (RV32IMAC, no FPU) -- see *RV32 and the Pico 2* below.
 
 ## Layout
 
@@ -14,7 +16,7 @@ micro-os-plu-iii-smp-riscv-pr-github/       the workspace
 ├── micro-os-plus-iii/                      the kernel (sibling clone)
 └── micro-os-plus-iii-riscv/                this port
     ├── CMakeLists.txt                      micro-os-plus::riscv, ::riscv-bare,
-    │                                       ::riscv-qemu-virt
+    │                                       ::riscv-qemu-virt, ::riscv-qemu-virt32
     ├── cmake/toolchains/riscv-none-elf.cmake
     ├── include/                            the port contract + ISA headers
     │   ├── cmsis-plus/rtos/port/           os-c-decls.h, os-decls.h, os-inlines.h
@@ -104,6 +106,47 @@ The Sv39 tables are real: the kernel runs in M-mode, where satp does not
 translate its own accesses, so `mmu-test` proves them through MPRV (M-mode
 loads/stores translated as S-mode), including a non-identity alias.
 
+## RV32 and the Pico 2
+
+**XLEN- and FPU-generic.** Nothing in the port assumes RV64 or an FPU:
+
+| | RV64GC (C906) | RV32IMAC, no FPU (Hazard3) |
+|---|---|---|
+| CSR values | `riscv::reg_t` = 64 bit | 32 bit |
+| trap frame (`port_ctx.hpp`) | x1..x31, mepc, mstatus, fcsr, f0..f31: **528 bytes** | x1..x31, mepc, mstatus: **144 bytes** |
+| `trap.S`, `startup.S` | `REG_S/REG_L` = `sd/ld`; FP block saved | `sw/lw`; no FP block (`__riscv_flen` undefined) |
+| `mcause` interrupt bit | bit 63 | bit 31 (`MCAUSE_INTERRUPT` = top bit of XLEN) |
+| 64-bit `time`/`cycle` | one CSR read | `rdtimeh`/`rdtime`/`rdtimeh`, repeated on a carry |
+| semihosting `SYS_EXIT` | block `{reason, status}` | reason in a1: status 0 -> `ApplicationExit` (exit 0), else `RunTimeErrorUnknown` (exit 1) |
+| MMU | Sv39 (`mmu.cpp`) | none; `mmu-test` reports `RESULT: SKIP` |
+
+**RV32 stand-in.** `micro-os-plus::riscv-qemu-virt32` is the `virt` machine
+compiled exactly as the pico-sdk compiles for Hazard3
+(`-march=rv32ima_zicsr_zifencei_zba_zbb_zbs_zbkb_zca_zcb_zcmp -mabi=ilp32`).
+`qemu.sh` picks the emulator from the image's ELF class; an RV32 image runs on
+`qemu-system-riscv32 -cpu rv32,f=false,d=false,zfa=false,zba=true,zbb=true,zbs=true,zbkb=true,zcb=true,zcmp=true`
+(QEMU's default rv32 model enables Zfa, which needs F). Any board's emulated
+tests can be built for it:
+
+```bash
+cmake -S . -B test/build-rv32 -G Ninja -D CMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-none-elf.cmake \
+      -D BOARD=milkv-duo -D UOS_QEMU_STANDIN=micro-os-plus::riscv-qemu-virt32
+cmake --build test/build-rv32 && (cd test/build-rv32 && ctest -LE hwd)
+```
+
+A `RESULT: SKIP` with exit 0 is a skip, not a failure (`qemu.sh` returns 77,
+CTest's `SKIP_RETURN_CODE`).
+
+**Pico 2 bring-up facts (measured 2026-11-05, Raspberry Pi Debug Probe, SWD):**
+
+| | |
+|---|---|
+| architecture switch | `OTP.ARCHSEL` (`0x40120158`), sampled per core at warm reset; the boot ROM switches both cores to Hazard3 by itself when the flash image's IMAGE_DEF block says RISC-V (datasheet §3.9). Read back after flashing a RISC-V image: `ARCHSEL = ARCHSEL_STATUS = 3` |
+| OpenOCD | **the Raspberry Pi build** (`~/.pico-sdk/openocd/0.12.0+dev`, `target/rp2350-riscv.cfg`). xPack OpenOCD 0.12.0-7.1 cannot: its `riscv` target rejects `-dap` (RISC-V debug over the Arm DAP) |
+| cores | both examined: XLEN=32, `misa=0x40901105`; core 1 waits in the boot ROM (pc `0x76de`) until launched |
+| semihosting | works; `SYS_EXIT` (32-bit form) ends OpenOCD with exit status 0, as on the Duo |
+| probe | Debugprobe firmware 2.0.1: OpenOCD warns it is old and uses a slower workaround |
+
 ## Milk-V Duo facts (from the duo-buildroot-sdk)
 
 | | |
@@ -145,7 +188,7 @@ xpm run test-hwd-all  --config riscv-milkv-duo-cmake-gcc-debug   # hw-all.sh
 
 ### Emulated images
 
-QEMU does not model the CV1800B. Each test's `qemu` image links the port
+QEMU does not model the CV1800B (nor the RP2350). Each test's `qemu` image links the port
 against QEMU's `virt` machine (`micro-os-plus::riscv-qemu-virt`: virt CLINT,
 NS16550 console, virtual LED, own linker script) -- the same sources, run on
 different silicon, the way the Cortex-M port runs the pico2's tests.
@@ -227,6 +270,10 @@ on the Duo and they cannot be built at `OS_NCPU=1` (the second C906 is a
 separate, non-coherent core); `sd_test`, `usb_*` -- no SD/USB drivers yet.
 
 ### Status (2026-11-05)
+
+RV32 (phase 1 of the Pico 2 port): the Duo's tests built for the RV32 stand-in
+(`test/build-rv32`): **7 passed, mmu-test skipped** (no MMU on RV32). RV64
+unchanged: port 8/8, harness 14/14.
 
 Kernel harness, QEMU virt (`xpm run test --config ...`):
 

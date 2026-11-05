@@ -12,7 +12,7 @@
  *
  * Everything width-dependent lives here: RV64 has 64-bit registers, so the
  * stack element, the saved stack pointer and the interrupt state (a copy of
- * mstatus.MIE) are 64 bits wide.
+ * mstatus.MIE) are XLEN bits wide.
  */
 
 #ifndef CMSIS_PLUS_RTOS_PORT_OS_C_DECLS_H_
@@ -21,8 +21,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#if !defined(__riscv) || (__riscv_xlen != 64)
-#error "The micro-os-plus-iii-riscv port is RV64 only (-march=rv64...)."
+#if !defined(__riscv) || (__riscv_xlen != 64 && __riscv_xlen != 32)
+#error "The micro-os-plus-iii-riscv port is for RV64 or RV32 harts."
 #endif
 
 typedef uint64_t os_port_clock_timestamp_t;
@@ -31,12 +31,13 @@ typedef uint64_t os_port_clock_offset_t;
 
 typedef bool os_port_scheduler_state_t;
 
-/* The saved mstatus.MIE bit (bit 3), 0 or 8. */
-typedef uint64_t os_port_irq_state_t;
+/* The saved mstatus.MIE bit (bit 3), 0 or 8: one XLEN register. */
+typedef uintptr_t os_port_irq_state_t;
 
-typedef uint64_t os_port_thread_stack_element_t;
-/* The psABI wants 16-byte stack alignment; context::create() aligns the top,
-   the allocation element only has to keep the 8-byte register slots aligned. */
+/* One XLEN register slot. */
+typedef uintptr_t os_port_thread_stack_element_t;
+/* The psABI wants 16-byte stack alignment; context::create() aligns the top.
+   The allocation element keeps stacks at least 8-byte aligned on RV32 too. */
 typedef uint64_t os_port_thread_stack_allocation_element_t;
 
 typedef struct
@@ -58,7 +59,11 @@ typedef struct
 #error "The RISC-V port does not implement the SMP scheduler yet."
 #endif
 
+#if __riscv_xlen == 64
 #define OS_INTEGER_RTOS_STACK_FILL_MAGIC (0xEFBEADDEEFBEADDEULL)
+#else
+#define OS_INTEGER_RTOS_STACK_FILL_MAGIC (0xEFBEADDEu)
+#endif
 
 #define OS_HAS_INTERRUPTS_STACK
 

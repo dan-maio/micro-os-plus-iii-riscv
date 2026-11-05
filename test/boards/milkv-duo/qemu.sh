@@ -23,8 +23,9 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 BUILD="${BUILD:-$ROOT/test/build}"
 SECS="${SECS:-120}"
 
-Q="${QEMU:-$(ls -d "$HOME"/.local/xPacks/@xpack-dev-tools/qemu-riscv/*/.content/bin/qemu-system-riscv64 2>/dev/null | sort -V | tail -1)}"
-Q="${Q:-qemu-system-riscv64}"
+QBIN="$(ls -d "$HOME"/.local/xPacks/@xpack-dev-tools/qemu-riscv/*/.content/bin 2>/dev/null | sort -V | tail -1)"
+READELF="$(ls -d "$HOME"/.local/xPacks/@xpack-dev-tools/riscv-none-elf-gcc/*/.content/bin/riscv-none-elf-readelf 2>/dev/null | sort -V | tail -1)"
+READELF="${READELF:-riscv-none-elf-readelf}"
 
 LOGS="$BUILD/.qemu-logs"; mkdir -p "$LOGS"
 
@@ -39,7 +40,17 @@ run_one () {
   fi
   local log="$LOGS/${app}.log"
   echo "== QEMU virt (milkv-duo tests) : $app =="
-  timeout "$SECS" "$Q" -M virt -cpu rv64 -smp 1 -m 128M -nographic \
+  # The image says which hart it is for: ELF32 -> an RV32 hart without an
+  # FPU and with the Hazard3 extensions; ELF64 -> RV64GC.
+  local q cpu
+  if "$READELF" -h "$elf" | grep -q 'Class:.*ELF32'; then
+    q="${QEMU:-${QBIN:+$QBIN/}qemu-system-riscv32}"
+    cpu="rv32,f=false,d=false,zfa=false,zba=true,zbb=true,zbs=true,zbkb=true,zcb=true,zcmp=true"
+  else
+    q="${QEMU:-${QBIN:+$QBIN/}qemu-system-riscv64}"
+    cpu="rv64"
+  fi
+  timeout "$SECS" "$q" -M virt -cpu "$cpu" -smp 1 -m 128M -nographic \
     -bios none -kernel "$elf" \
     -semihosting-config enable=on,target=native \
     -monitor none -serial stdio 2>&1 | tee "$log"
@@ -51,6 +62,12 @@ run_one () {
   if [[ $rc -eq 0 ]] && grep -q 'RESULT: PASS' "$log"; then
     echo "$app: PASS"
     return 0
+  fi
+  # A test that does not apply to this hart (mmu-test on RV32) says so and
+  # exits 0: not a failure. CTest shows it as skipped (SKIP_RETURN_CODE 77).
+  if [[ $rc -eq 0 ]] && grep -q 'RESULT: SKIP' "$log"; then
+    echo "$app: SKIP"
+    return 77
   fi
   echo "$app: FAIL (exit $rc, see $log)"
   return 1
@@ -66,7 +83,8 @@ for elf in "$BUILD"/test/*-qemu.elf "$BUILD"/test/*-qemu; do
   [[ -e "$elf" ]] || continue
   app="$(basename "$(basename "$elf" .elf)" -qemu)"
   n=$((n + 1))
-  run_one "$app" || fails=$((fails + 1))
+  run_one "$app"; r=$?
+  if [[ $r -ne 0 && $r -ne 77 ]]; then fails=$((fails + 1)); fi
 done
 [[ $n -gt 0 ]] || { echo "no *-qemu images in $BUILD/test (build first)" >&2; exit 2; }
 echo "== $((n - fails))/$n passed =="

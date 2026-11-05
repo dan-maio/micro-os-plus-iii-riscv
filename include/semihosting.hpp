@@ -16,9 +16,11 @@
  * OpenOCD (`arm semihosting enable` on a riscv target) and QEMU
  * (-semihosting-config enable=on) both recognise the sequence.
  *
- * RV64 is a 64-bit target: every parameter block is made of 64-bit words,
- * and SYS_EXIT takes a TWO-field block { reason, exit_status }, exactly as
- * on AArch64.
+ * Parameter blocks are made of XLEN-sized words. On RV64 SYS_EXIT takes a
+ * TWO-field block { reason, exit_status }, exactly as on AArch64. On RV32 it
+ * takes the reason itself in a1 and carries no status: 0 is reported as
+ * ADP_Stopped_ApplicationExit, anything else as ADP_Stopped_RunTimeError-
+ * Unknown -- OpenOCD exits 0 / 1 for them, QEMU likewise.
  *
  * A test ENDS with exit_success() / exit_failure() (directly, through
  * report_result(), through hw_result::ok/fail, or through _Exit()): that is
@@ -52,8 +54,9 @@ namespace semihosting
     SYS_EXIT = 0x18,
   };
 
-  // ADP_Stopped_ApplicationExit
+  // ADP_Stopped_ApplicationExit, ADP_Stopped_RunTimeErrorUnknown
   inline constexpr std::uint64_t ADP_STOPPED_APPLICATION_EXIT = 0x20026;
+  inline constexpr std::uint64_t ADP_STOPPED_RUN_TIME_ERROR = 0x20023;
 
   // The trap: a0 = operation, a1 = parameter; returns a0.
   inline long __attribute__ ((noinline))
@@ -105,19 +108,28 @@ namespace semihosting
   inline void
   write_buf (const char* buf, std::size_t len) noexcept
   {
-    volatile std::uint64_t block[3]
-        = { 1, reinterpret_cast<std::uint64_t> (buf), len };
+    volatile std::uintptr_t block[3]
+        = { 1, reinterpret_cast<std::uintptr_t> (buf), len };
     call (SYS_WRITE, block);
   }
 
-  // SYS_EXIT (0x18): stop the run and report a status to the host. a1 points
-  // to { reason, exit_status }. Does not return under a debugger/emulator;
+  // SYS_EXIT (0x18): stop the run and report a status to the host (see the
+  // RV32/RV64 difference above). Does not return under a debugger/emulator;
   // without one, spins (never `wfi`).
   [[noreturn]] inline void
   exit (std::uint64_t reason, std::uint64_t status) noexcept
   {
+#if __riscv_xlen == 64
     volatile std::uint64_t block[2] = { reason, status };
     call (SYS_EXIT, block);
+#else
+    if (reason == ADP_STOPPED_APPLICATION_EXIT && status != 0)
+      {
+        reason = ADP_STOPPED_RUN_TIME_ERROR;
+      }
+    call (SYS_EXIT, reinterpret_cast<const volatile void*> (
+                        static_cast<std::uintptr_t> (reason)));
+#endif
     for (;;)
       {
         __asm__ volatile("" ::: "memory");

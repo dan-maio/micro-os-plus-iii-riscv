@@ -361,7 +361,7 @@ foreach (_app IN LISTS _apps)
                 COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/qemu.sh" "${_app}")
       set_tests_properties ("${BOARD}-${_app}-qemu" PROPERTIES
         ENVIRONMENT "BOARD=${BOARD};BUILD=${CMAKE_BINARY_DIR}"
-        LABELS "qemu" TIMEOUT 300)
+        LABELS "qemu" TIMEOUT 300 SKIP_RETURN_CODE 77)
     else ()
       add_test (NAME "${BOARD}-${_app}-hwd"
                 COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/hw.sh" "${_app}")

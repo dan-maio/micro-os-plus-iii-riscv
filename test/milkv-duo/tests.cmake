@@ -13,7 +13,11 @@
 # -----------------------------------------------------------------------------
 
 function (board_test_qemu_libs _app _out)
-  set (${_out} micro-os-plus::riscv-qemu-virt PARENT_SCOPE)
+  if (UOS_QEMU_STANDIN)
+    set (${_out} ${UOS_QEMU_STANDIN} PARENT_SCOPE)
+  else ()
+    set (${_out} micro-os-plus::riscv-qemu-virt PARENT_SCOPE)
+  endif ()
 endfunction ()
 
 # -----------------------------------------------------------------------------

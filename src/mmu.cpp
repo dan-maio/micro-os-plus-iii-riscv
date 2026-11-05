@@ -10,6 +10,9 @@
 
 #include <cstdint>
 
+// Sv39 is an RV64 scheme; an RV32 hart (Hazard3) has no MMU at all.
+#if __riscv_xlen == 64
+
 #include <mmu.hpp>
 #include <riscv-board.hpp>
 #include <riscv-csr.hpp>
@@ -200,3 +203,5 @@ namespace mmu
       }
   }
 } // namespace mmu
+
+#endif // __riscv_xlen == 64

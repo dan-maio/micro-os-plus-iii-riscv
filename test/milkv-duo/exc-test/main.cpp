@@ -114,31 +114,44 @@ os_main (int, char*[])
     {
       // Values that must survive a trap, in callee- and caller-saved
       // integer registers and in an FP register.
-      register std::uint64_t s2 __asm__ ("s2") = 0x5252525200000000ULL + i;
-      register std::uint64_t t3 __asm__ ("t3") = 0x7373737300000000ULL + i;
+      // XLEN-wide values; the FP register only on a hart with an FPU.
+      const std::uintptr_t s2_want
+          = static_cast<std::uintptr_t> (0x5252525200000000ULL) + 0x5200 + i;
+      const std::uintptr_t t3_want
+          = static_cast<std::uintptr_t> (0x7373737300000000ULL) + 0x7300 + i;
+      register std::uintptr_t s2 __asm__ ("s2") = s2_want;
+      register std::uintptr_t t3 __asm__ ("t3") = t3_want;
+#if defined(__riscv_flen)
       register double fs3 __asm__ ("fs3") = 1.5 * (i + 1);
+#define EXC_FP_OPERAND , "+f"(fs3)
+#else
+#define EXC_FP_OPERAND
+#endif
 
       __asm__ volatile(".option push\n"
                        ".option norvc\n"
                        ".word 0xc0001073\n" // unimp
                        ".option pop\n"
-                       : "+r"(s2), "+r"(t3), "+f"(fs3)
+                       : "+r"(s2), "+r"(t3) EXC_FP_OPERAND
                        :
                        : "memory");
-      __asm__ volatile("ecall" : "+r"(s2), "+r"(t3), "+f"(fs3) : : "memory");
+      __asm__ volatile("ecall" : "+r"(s2), "+r"(t3) EXC_FP_OPERAND : : "memory");
 
 #if defined(QEMU_BUILD)
       // Nothing is mapped at 0x100 on QEMU virt (the boot ROM starts at
       // 0x1000). On the CV1800B the low addresses are not documented as a
       // hole, so the hardware image does not probe them.
-      __asm__ volatile("ld zero, 0x100(zero)"
-                       : "+r"(s2), "+r"(t3), "+f"(fs3)
+      __asm__ volatile("lw zero, 0x100(zero)"
+                       : "+r"(s2), "+r"(t3) EXC_FP_OPERAND
                        :
                        : "memory");
 #endif
 
-      if (s2 != 0x5252525200000000ULL + i || t3 != 0x7373737300000000ULL + i
-          || fs3 != 1.5 * (i + 1))
+      if (s2 != s2_want || t3 != t3_want
+#if defined(__riscv_flen)
+          || fs3 != 1.5 * (i + 1)
+#endif
+      )
         {
           regs_ok = false;
         }

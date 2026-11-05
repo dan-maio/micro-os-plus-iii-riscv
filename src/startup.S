@@ -12,6 +12,8 @@
  */
 
 	.section .text.entry, "ax"
+#include <port_ctx.hpp>
+
 	.globl	_start
 	.type	_start, @function
 _start:
@@ -32,24 +34,26 @@ _start:
 	/* The boot stack: main() runs on it until the scheduler starts. */
 	la	sp, __stack_top
 
-	/* FPU on (FS = Initial) and clean rounding state, MPRV off. */
+	/* MPRV off; with an FPU: FPU on (FS = Initial), clean rounding state. */
+	li	t0, (1 << 17)
+	csrc	mstatus, t0
+#if defined(__riscv_flen)
 	li	t0, (3 << 13)
 	csrc	mstatus, t0
 	li	t0, (1 << 13)
 	csrs	mstatus, t0
-	li	t0, (1 << 17)
-	csrc	mstatus, t0
 	fscsr	zero
+#endif
 
 	/* The image was just written by the debugger: drop stale I-cache lines. */
 	fence.i
 
-	/* Zero .bss (8 bytes at a time; the linker aligns both ends). */
+	/* Zero .bss (a register at a time; the linker aligns both ends). */
 	la	t0, __bss_start
 	la	t1, __bss_end
 1:	bgeu	t0, t1, 2f
-	sd	zero, 0(t0)
-	addi	t0, t0, 8
+	REG_S	zero, 0(t0)
+	addi	t0, t0, PORT_REGBYTES
 	j	1b
 2:
 	call	os_startup_initialize_hardware_early

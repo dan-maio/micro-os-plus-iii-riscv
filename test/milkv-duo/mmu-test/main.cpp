@@ -56,6 +56,20 @@ namespace
   }
 } // namespace
 
+#if __riscv_xlen != 64
+
+int
+os_main (int, char*[])
+{
+  uart::init (board::UART_BAUD);
+  uart::write ("\nmmu-test on " PORT_BANNER_LONG "\n");
+  uart::write ("RESULT: SKIP (mmu-test: Sv39 needs RV64; no MMU on RV32)\n");
+  hw_result::ok ();
+  return 0;
+}
+
+#else
+
 int
 os_main (int, char*[])
 {
@@ -142,3 +156,5 @@ os_main (int, char*[])
       sysclock.sleep_for (1000);
     }
 }
+
+#endif // __riscv_xlen != 64

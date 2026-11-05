@@ -78,7 +78,7 @@ extern "C"
 void
 riscv_port_yield (void)
 {
-  register std::uint64_t a7 __asm__ ("a7") = RISCV_PORT_YIELD_ECALL;
+  register ctx_reg_t a7 __asm__ ("a7") = RISCV_PORT_YIELD_ECALL;
   // a7 comes back 0 (trap.cpp consumes the marker).
   __asm__ volatile("ecall" : "+r"(a7) : : "memory");
 }
@@ -175,21 +175,23 @@ namespace os
         // Recognisable garbage in the registers a thread must not rely on.
         for (unsigned i = 5; i < 32; ++i)
           {
-            f->x[i] = 0xCCCCCCCC00000000ULL | i;
+            f->x[i] = static_cast<ctx_reg_t> (0xCCCCCCCC00000000ULL) | i;
           }
 
-        f->x[0] = reinterpret_cast<std::uint64_t> (func); // mepc
-        f->x[CTX_A0] = reinterpret_cast<std::uint64_t> (args);
+        f->x[0] = reinterpret_cast<std::uintptr_t> (func); // mepc
+        f->x[CTX_A0] = reinterpret_cast<std::uintptr_t> (args);
         // The thread function never returns (the kernel's trampoline exits
         // the thread); a zero ra makes a return that does happen fault at 0.
         f->x[CTX_RA] = 0;
-        f->x[CTX_GP] = reinterpret_cast<std::uint64_t> (__global_pointer$);
+        f->x[CTX_GP] = reinterpret_cast<std::uintptr_t> (__global_pointer$);
         f->x[CTX_TP] = 0;
 
-        // Resume in M-mode, interrupts enabled after mret, FPU on.
-        f->mstatus = riscv::csr::MSTATUS_MPP_M | riscv::csr::MSTATUS_MPIE
-                     | riscv::csr::MSTATUS_FS_INITIAL;
+        // Resume in M-mode, interrupts enabled after mret; FPU on, if any.
+        f->mstatus = riscv::csr::MSTATUS_MPP_M | riscv::csr::MSTATUS_MPIE;
+#if defined(__riscv_flen)
+        f->mstatus |= riscv::csr::MSTATUS_FS_INITIAL;
         f->fcsr = 0;
+#endif
 
         th_ctx->port_.stack_ptr
             = reinterpret_cast<rtos::thread::stack::element_t*> (f);

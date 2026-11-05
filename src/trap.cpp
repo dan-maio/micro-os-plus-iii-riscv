@@ -195,7 +195,7 @@ riscv_trap_dispatch (ctx_t* frame)
       // No debugger behind the semihosting call: answer -1 and step over
       // the ebreak and the srai that follows it.
       riscv_semihosting_absent = true;
-      frame->x[CTX_A0] = static_cast<std::uint64_t> (-1);
+      frame->x[CTX_A0] = static_cast<ctx_reg_t> (-1);
       frame->x[0] += 8;
       return frame;
     }

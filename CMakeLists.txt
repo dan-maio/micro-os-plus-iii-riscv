@@ -181,6 +181,28 @@ uos_riscv_add_port (micro-os-plus-iii-riscv-qemu-virt
 add_library (micro-os-plus::riscv-qemu-virt
              ALIAS micro-os-plus-iii-riscv-qemu-virt-interface)
 
+# The same virt machine as an RV32 hart without an FPU, compiled exactly as
+# the RP2350's Hazard3 cores are (the pico-sdk's -march): the stand-in for
+# RV32 boards, and the proof that the port is XLEN-generic.
+set (UOS_RISCV_RV32_FLAGS
+     -march=rv32ima_zicsr_zifencei_zba_zbb_zbs_zbkb_zca_zcb_zcmp -mabi=ilp32
+     -mcmodel=medany
+     CACHE INTERNAL "RV32 (Hazard3) code generation")
+uos_riscv_add_port (micro-os-plus-iii-riscv-qemu-virt32
+                    "${CMAKE_CURRENT_SOURCE_DIR}/qemu/virt"
+                    FLAGS ${UOS_RISCV_RV32_FLAGS}
+                    DEFINES SEMIHOST_TRAP_CHOSEN
+                            "PORT_GREETING=\"µOS++ QEMU virt (RV32IMAC, Hazard3 code)\""
+                    LINKER "${CMAKE_CURRENT_SOURCE_DIR}/qemu/virt/linker.ld")
+add_library (micro-os-plus::riscv-qemu-virt32
+             ALIAS micro-os-plus-iii-riscv-qemu-virt32-interface)
+
+# Which stand-in a board's `qemu` images use. A board sets its default
+# (UOS_BOARD_QEMU_LIB); this cache entry overrides it, e.g. to build the
+# Duo's tests as RV32 (-DUOS_QEMU_STANDIN=micro-os-plus::riscv-qemu-virt32).
+set (UOS_QEMU_STANDIN "" CACHE STRING
+     "Override the board's QEMU stand-in library (empty: the board's choice)")
+
 # Standalone: this repository is the top-level build (its own test/ builder
 # registers CTest cases). Under the kernel's harness (tests/), the harness
 # platform registers them instead.
