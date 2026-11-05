@@ -75,6 +75,31 @@ namespace clint
 
   // The machine software interrupt of `hart` (default: this one). Raising
   // another hart's is the inter-processor interrupt.
+#if defined(RISCV_BOARD_SOFTIRQ_SIO)
+  // RP2350: one SIO register for all cores, RISCV_SOFTIRQ: write 1 << h to
+  // set core h's MSIP, 1 << (8 + h) to clear it; reading bit h gives the
+  // flag (datasheet, SIO RISCV_SOFTIRQ). Both cores may write it at once.
+  inline void
+  msip_set (unsigned hart = riscv::this_hart ())
+  {
+    reg32 (riscv_board::CLINT_MSIP) = 1u << hart;
+    __asm__ volatile("fence o, i" ::: "memory");
+  }
+
+  inline std::uint32_t
+  msip_read (unsigned hart = riscv::this_hart ())
+  {
+    __asm__ volatile("fence o, i" ::: "memory");
+    return (reg32 (riscv_board::CLINT_MSIP) >> hart) & 1u;
+  }
+
+  inline void
+  msip_clear (unsigned hart = riscv::this_hart ())
+  {
+    reg32 (riscv_board::CLINT_MSIP) = 1u << (8u + hart);
+    __asm__ volatile("fence o, i" ::: "memory");
+  }
+#else
   inline void
   msip_set (unsigned hart = riscv::this_hart ())
   {
@@ -97,6 +122,7 @@ namespace clint
     reg32 (msip_addr (hart)) = 0;
     __asm__ volatile("fence o, i" ::: "memory");
   }
+#endif
 
   // mtime_read() is below; now() needs it on harts without the time CSR.
   inline std::uint64_t mtime_read (void);

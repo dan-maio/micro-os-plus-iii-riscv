@@ -77,6 +77,9 @@ SECTIONS
     . = ALIGN(8);
     __data_end = .;
   } > RAM
+  /* Where .data's initial values are: here the same place (the image is
+     loaded into RAM), so startup.S copies nothing. */
+  __data_load = LOADADDR(.data);
 
   .bss (NOLOAD) : ALIGN(16)
   {

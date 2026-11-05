@@ -54,6 +54,19 @@ _start:
 	/* The image was just written by the debugger: drop stale I-cache lines. */
 	fence.i
 
+	/* .data from its load address, for an image that runs from flash (the
+	 * Pico 2); an image loaded into RAM has them equal and skips this. */
+	la	t0, __data_load
+	la	t1, __data_start
+	la	t2, __data_end
+	beq	t0, t1, 2f
+1:	bgeu	t1, t2, 2f
+	lw	t3, 0(t0)
+	sw	t3, 0(t1)
+	addi	t0, t0, 4
+	addi	t1, t1, 4
+	j	1b
+2:
 	/* Zero .bss (a register at a time; the linker aligns both ends). */
 	la	t0, __bss_start
 	la	t1, __bss_end

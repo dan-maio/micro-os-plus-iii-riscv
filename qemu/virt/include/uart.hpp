@@ -17,8 +17,13 @@
 #define PORT_BANNER_LONG "QEMU virt (RV32IMAC, Hazard3 code)"
 #endif
 #define PORT_BANNER_SHORT "QEMU virt"
+#if __riscv_xlen == 64
 #define PORT_BANNER_ISA "RV64GC"
 #define PORT_BANNER_CPU "rv64"
+#else
+#define PORT_BANNER_ISA "RV32IMAC"
+#define PORT_BANNER_CPU "rv32"
+#endif
 
 namespace uart
 {

@@ -6,8 +6,9 @@ architecture project beside `micro-os-plus-iii-cortexm`, `-aarch32` and
 `-aarch64`, built and tested the same way.
 
 First board: **Milk-V Duo (64 MB)** -- Sophgo CV1800B, T-Head C906 @ 850 MHz,
-64 MiB DDR2 (RV64GC). In progress: **Raspberry Pi Pico 2** (RP2350) on its two
-Hazard3 cores (RV32IMAC, no FPU) -- see *RV32 and the Pico 2* below.
+64 MiB DDR2 (RV64GC). Second board: **Raspberry Pi Pico 2** (RP2350) on its
+two Hazard3 cores (RV32IMAC, no FPU), µOS++ SMP on both -- see *RV32 and the
+Pico 2*, *SMP* and *Pico 2 hardware* below.
 
 ## Layout
 
@@ -185,6 +186,19 @@ A board without a hardware linker script builds only `qemu` images
 images keep their hart count; `qemu.sh` starts as many harts as the image was
 built for (`riscv_secondary_boot`'s size), one for a single-hart image.
 
+## Pico 2 hardware (test/boards/pico2)
+
+| | |
+|---|---|
+| image | runs from flash (XIP, `linker.ld`); `src/image-def.S` puts the RISC-V IMAGE_DEF block (EXE / RISC-V / RP2350, entry `_start`, sp) first, inside the 4 KiB the boot ROM scans; on an Arm boot the ROM switches both cores to Hazard3. `startup.S` now copies `.data` from `__data_load` (`LOADADDR(.data)`; equal to `__data_start` on RAM images) |
+| clocks | `src/clocks.cpp` (the Cortex-M pico2 sequence): XOSC 12 MHz -> PLL_SYS -> clk_sys = clk_peri = 150 MHz, flash SCK divider 3 set first; TICKS: watchdog, TIMER0 and the RISC-V timer at 1 us |
+| time | SIO `MTIME` (`MTIME_CTRL` EN, FULLSPEED off): **1 MHz** (`TIMEBASE_HZ`); `TIME_CSR = false` (Hazard3 has no `time` CSR) |
+| comparator / IPI | SIO `MTIMECMP` per core at one address (stride 0); `RISCV_SOFTIRQ` set/clear bits (`RISCV_BOARD_SOFTIRQ_SIO` in `clint.hpp`) |
+| console | UART0 PL011, GPIO0 TX / GPIO1 RX (the Debug Probe's UART), 115200; shared by both harts under SIO spinlock 1 with MIE masked; copied to semihosting from threads |
+| LED | GPIO25 |
+| core 1 | `src/multicore.cpp`: the boot ROM FIFO handshake `{0, 0, 1, mtvec, sp, entry}` (pico-sdk `multicore_launch_core1_raw`, `h3.unblock` for SEV) into `src/secondary.S` (loads gp and mtvec -- the ROM does not set gp), then the caller's entry. **No PSM reset of core 1**: measured, forcing it off/on under the debugger gives `[rp2350.rv1] Hart unexpectedly reset!` and no handshake; after a chip reset it already waits in the ROM (as the pico-sdk assumes) |
+| `hw.sh` | Raspberry Pi OpenOCD (`~/.pico-sdk/openocd/*`, also looked up on the mounted home), probe pinned by VID:PID **2e8a:000c** (with the Duo's Sipeed probe also plugged in, OpenOCD took that one first); `init; reset init; program <elf> verify; reset init; arm semihosting enable` (both harts)`; resume`; verdict = RESULT line + OpenOCD's exit status (SYS_EXIT) |
+
 ## Milk-V Duo facts (from the duo-buildroot-sdk)
 
 | | |
@@ -317,6 +331,11 @@ SMP (phase 2): board `pico2` (emulated only so far), `smp-test2` ported from
 the Cortex-M Pico 2 test, on `qemu-system-riscv32 -smp 2`: **PASS 8/8**
 (both workers, 40 handoffs, worker 1 on hart 1). Single-hart builds
 unchanged (RV64 8/8, RV32 7 + skip, harness 14/14).
+
+Pico 2 hardware (phase 3, Raspberry Pi Debug Probe): **`smp-test2` PASS,
+twice in a row** -- worker 0 on core 0 and worker 1 on core 1, 20 rounds
+each, 40 handoffs, exit 0. A worker's lines are ~650 ms apart in RTOS time on
+the board against 500 ms on QEMU (cause not measured yet).
 
 Found on the way, in the runner: `qemu.sh` ran under `pipefail` and tested the
 image with `nm ... | grep -q`. `grep -q` exits at the first match, `nm` then
