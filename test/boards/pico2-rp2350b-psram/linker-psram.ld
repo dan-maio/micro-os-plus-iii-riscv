@@ -85,6 +85,9 @@ SECTIONS
     __psram_ram_start = .;
     KEEP(*(.psram_ram))
     . = ALIGN(8);
+    /* The flash writer (src/flash_rp2350.cpp): runs while XIP is off. */
+    KEEP(*(.data.ramfunc .data.ramfunc.*))
+    . = ALIGN(8);
     *(.data.amo)
     *(.bss.amo)
     . = ALIGN(4);

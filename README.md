@@ -230,6 +230,9 @@ sets its own linker scripts, pins and greeting.
 | **AMOs** | measured: an `amoswap.w` to the PSRAM window faults (**mcause 7**, store/AMO access fault) -- the first kernel lock after start-up. The objects the port changes with AMOs (`smp_klock`, the soft-IRQ words) are placed in `.data.amo` / `.bss.amo` (`include/riscv-amo.hpp`): ordinary linker scripts fold them into `.data`/`.bss`, `linker-psram.ld` keeps them in SRAM inside `.psram_ram` (copied from flash, zeros included). The PSRAM images contain no other AMO/LR/SC (checked with objdump) |
 | clocks | as the Pico 2's (`PICO2_SYS_CLK_KHZ`, the table, 250 MHz); at 250 MHz the PSRAM divider becomes 3 (83 MHz) |
 | trap report | adds the hart, `mstatus` and 16 words of the interrupted stack (a jump to 0 leaves mepc and ra 0) |
+| flash writer | `src/flash_rp2350.cpp` (`include/flash_rp2350.h`): the predecessor's `mu_flash_erase / _program / _xip_flush / _core1_lockout` API (micro-os-plus-iii-pico2, `src/xip-flash`) on the pico-sdk's RP2350 sequence -- ROM functions through the RISC-V lookup entry (16-bit address at `0x7dfa`, `RT_FLAG_FUNC_RISCV`); MIE off; XIP cache cleaned (pending PSRAM writes); QSPI pads, QMI M0 timing and the CS1 (PSRAM) registers saved; `connect_internal_flash`, `flash_exit_xip`, erase/program, `flash_flush_cache`; XIP re-entered through the boot ROM's setup stub copied from boot RAM (as the SDK's `flash_enable_xip_via_boot2`), or `flash_enter_cmd_xip` when the stub is empty; everything restored. It lives in `.data.ramfunc` (SRAM on every linker script) and calls out only through registers (checked in the disassembly) |
+| why MIE is off | between `flash_exit_xip` and the re-entry nothing can be fetched from flash, and the trap vector, the dispatcher and every handler are in flash: an interrupt there (the 1 ms tick, during a tens-of-ms erase) would fetch from a flash that is not mapped. The other hart is parked in SRAM (`mu_flash_core1_lockout`) with its MIE off for the same reason. `mtime` keeps counting, so the kernel clock catches up |
+| `linker-flatfs.ld` | the image in the first 1 MiB, `FLASH_FS` (3 MiB) at 0x10100000, `_fs_base / _fs_size / _flash_fs_begin / _flash_fs_end` -- the predecessor's `pico2-rp2350-flatfs.ld` layout; data in SRAM (a flash write takes the PSRAM away too, so the caller's stack must not be there) |
 
 The nested-clock tests are interactive, as on the Cortex-M board: a cold boot
 runs at 48 MHz and shows the potentiometer (GPIO40 = ADC0) and the clock it
@@ -431,12 +434,18 @@ WeAct RP2350B (2026-11-06, probe c251:f001):
 | smp-test-nested-clock_200 | 2 | **PASS** (UART) | N=500; pot -> 200 MHz, `y`, watchdog reboot, solver + nested IRQs |
 | smp-test-nested-clock_250 | 2 | **PASS** (UART) | N=800; pot -> **250 MHz** overclock, `y`, reboot, solver + nested IRQs |
 | smp-test-nested-clock | 2 | not run yet | N=1000 (4 MB in place) |
+| smp-test-xip | 2 | **PASS** | from the predecessor (not in the Cortex-M repo): erase a FLASH_FS sector (reads 0xFF), program a page (reads back through XIP), then core 1 runs |
+| smp-test-xip-core1park | 2 | **PASS** | 4/4 rounds of erase + program while core 1 runs from flash, parked in SRAM for each write; its counter moved every round |
+| smp-test-xip-fs | 2 | **PASS** | the predecessor's append-log flat-fs (`fs-archive.cpp`, unchanged) on the writer: format, three files added, listed, CRC-32 and bytes checked through XIP, found by name. The predecessor's XIP-classifier step (it parses the stored files as ARM `.so` modules) moves to the loader stage; the three files are kept as payloads |
 | fp-switch (harness) | 1 | not run yet | built (the kernel suite through the port tree); the kernel-harness platform is not added yet |
 
 The first eleven passed twice: once with the `rv32ia` libraries and again with
 `rv32imc`, both before the clock driver was extended. **Not rerun since that
 change** (the clock table, the raise-only QSPI dividers, the UART divider from
-the running clock): those eleven and the Pico 2's tests. One
+the running clock): those eleven and the Pico 2's tests. The flash
+group is from the predecessor project (`micro-os-plus-iii-pico2`); its loader
+tests (`smp-test-loader-*`, `smp-test-xip-loader-*`) and the PSRAM-execution
+tests (`pizero-psram-exec*`) are not ported yet. One
 `smp-test-nested-clock_200` run trapped on the second boot after the reboot
 (mcause 2, mepc 0, ra 0, on the boot stack); the next run passed. Not
 root-caused; the extended trap report is for the next occurrence.

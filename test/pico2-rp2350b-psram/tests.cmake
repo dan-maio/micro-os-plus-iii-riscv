@@ -7,13 +7,13 @@
 # keep their data in the 8 MB PSRAM (linker-psram.ld, PICO2_PSRAM).
 # -----------------------------------------------------------------------------
 
-set (_board_smp_tests smp-test2 smp-test3 smp-test4 smp-test5 smp-test-ko
+set (_board_smp_tests smp-test-xip smp-test-xip-core1park smp-test-xip-fs smp-test2 smp-test3 smp-test4 smp-test5 smp-test-ko
      smp-test-nested smp-mat-test smp-mat-test_200 smp-mat-test_250 smp-test-nested-clock
      smp-test-nested-clock_200 smp-test-nested-clock_250)
 
 # Tests that program RP2350 peripherals directly (TIMER0, SIO, ADC, QMI),
 # and the bare one: hardware only, as on the Cortex-M board.
-set (BOARD_TEST_HWD_ONLY smp-test0 smp-test3 smp-test4 smp-test5 smp-test-ko
+set (BOARD_TEST_HWD_ONLY smp-test-xip smp-test-xip-core1park smp-test-xip-fs smp-test0 smp-test3 smp-test4 smp-test5 smp-test-ko
      smp-test-nested smp-mat-test smp-mat-test_200 smp-mat-test_250 smp-test-nested-clock
      smp-test-nested-clock_200 smp-test-nested-clock_250)
 
@@ -26,6 +26,11 @@ set (_psram_tests smp-mat-test smp-mat-test_200 smp-mat-test_250 smp-test-nested
 
 # Resolved here: inside a function CMAKE_CURRENT_LIST_DIR is the caller's.
 set (_psram_linker "${CMAKE_CURRENT_LIST_DIR}/../boards/pico2-rp2350b-psram/linker-psram.ld")
+
+# The flash tests (from the predecessor micro-os-plus-iii-pico2, not in the
+# Cortex-M repo): the image in the first 1 MiB, a flat file system after it.
+set (_flatfs_tests smp-test-xip smp-test-xip-core1park smp-test-xip-fs)
+set (_flatfs_linker "${CMAKE_CURRENT_LIST_DIR}/../boards/pico2-rp2350b-psram/linker-flatfs.ld")
 
 # The three that drive the clock tree themselves (potentiometer -> SYS_TABLE
 # row -> watchdog reboot) and read the ADC: the clock comes from the watchdog
@@ -57,6 +62,8 @@ endfunction ()
 function (board_test_linker _app _out)
   if ("${_app}" IN_LIST _psram_tests)
     set (${_out} "${_psram_linker}" PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _flatfs_tests)
+    set (${_out} "${_flatfs_linker}" PARENT_SCOPE)
   else ()
     set (${_out} "" PARENT_SCOPE)
   endif ()
