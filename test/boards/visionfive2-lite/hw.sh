@@ -12,17 +12,19 @@
 # The session, OpenOCD only (no GDB, nothing redirected):
 #   init
 #   (HW_RESET=1: reset halt; sleep 3000 -- every hart reset and halted)
-#   halt                       harts 2..4 stay debug-halted; hart 1 runs the test
+#   halt                       all four U74; the ones the image does not drive
+#                              stay debug-halted
 #   load_image <elf>           into DDR at 0x40200000
-#   reg priv 3                 µOS++ runs in M-mode
-#   pc riscv_board_park, resume, 100 ms, halt
-#                              hart 1 is left stopped by a plain halt request.
-#                              Measured: a hart left stopped on the previous
-#                              run's semihosting exit ebreak (dcsr.cause 1)
-#                              never halted on its ebreaks in the next run --
-#                              every run after a PASS hung, every run after a
-#                              hang passed.
-#   arm semihosting enable     the test's output and its SYS_EXIT verdict
+#   for each hart the image drives (1, or 1..4 for an SMP image):
+#     reg priv 3; pc riscv_board_park, resume, 100 ms, halt; semihosting on
+#                              every hart is left stopped by a plain halt
+#                              request. Measured: a hart left stopped on the
+#                              previous run's semihosting exit ebreak
+#                              (dcsr.cause 1) never halted on its ebreaks in
+#                              the next run -- every run after a PASS hung,
+#                              every run after a hang passed.
+#   SMP image (riscv_secondary_boot present, NCPU from its size): clear the
+#     release slots, start harts 2..NCPU at _start (the port parks them)
 #   reg pc <_start>, resume    hart 1 runs the test
 #
 # Wiring (40-pin header): TMS 35, TCK 37, TDI 38, TDO 40, GND 39 (JTAG);
@@ -90,6 +92,36 @@ ABSENT="$("${NM%readelf}nm" "$ELF" | awk '/ riscv_semihosting_absent$/ { print "
 PARK="$("${NM%readelf}nm" "$ELF" | awk '/ riscv_board_park$/ { print "0x" $1 }')"
 [[ -n "$PARK" ]] || { echo "hw.sh: no riscv_board_park in $ELF -- rebuild" >&2; exit 2; }
 
+# How many U74 harts the image drives: an SMP image has the port's release
+# slots, riscv_secondary_boot[OS_NCPU] of 3 XLEN words (startup.S).
+read -r SLOTS SLOTS_SIZE < <("${NM%readelf}nm" -S "$ELF" | awk '/ riscv_secondary_boot$/ { print "0x" $1, "0x" $2 }')
+NCPU=1
+if [[ -n "${SLOTS:-}" ]]; then
+  NCPU=$(( SLOTS_SIZE / 24 ))
+fi
+HARTS=""; for (( h = 1; h <= NCPU; h++ )); do HARTS="$HARTS $h"; done
+SECONDARIES=""; for (( h = 2; h <= NCPU; h++ )); do SECONDARIES="$SECONDARIES $h"; done
+
+# After the load, for every hart the image drives: M-mode, a short run on
+# riscv_board_park, a plain halt (so no hart starts from a state left by the
+# previous session's semihosting ebreak -- see the header), semihosting on.
+# SMP: the release slots are cleared (the DDR keeps the previous run's, and
+# a stale magic would release a hart before CPU 0 has set it up), harts
+# 2..NCPU start at _start, where the port parks them, then hart 1.
+START_ARGS=()
+for h in $HARTS; do
+  START_ARGS+=(-c "targets jh7110.cpu$h" -c "reg priv 3" -c "reg pc $PARK" \
+               -c "resume" -c "sleep 100" -c "halt" -c "arm semihosting enable")
+done
+if (( NCPU > 1 )); then
+  START_ARGS+=(-c "targets jh7110.cpu1" \
+               -c "write_memory $SLOTS 64 [lrepeat $(( SLOTS_SIZE / 8 )) 0]")
+  for h in $SECONDARIES; do
+    START_ARGS+=(-c "targets jh7110.cpu$h" -c "reg pc $ENTRY" -c "resume")
+  done
+fi
+START_ARGS+=(-c "targets jh7110.cpu1" -c "reg pc $ENTRY" -c "resume")
+
 OCD="${OPENOCD:-$(ls -d "$HOME"/.local/xPacks/@xpack-dev-tools/openocd/*/.content/bin/openocd 2>/dev/null | sort -V | tail -1)}"
 OCD="${OCD:-openocd}"
 SCRIPTS_ARG=()
@@ -101,7 +133,7 @@ LOGS="$BUILD/.hw-logs"; mkdir -p "$LOGS"
 LOG="$LOGS/${APP}.log"
 rm -f "$LOG"
 
-echo "== VisionFive 2 Lite : $APP (entry $ENTRY) =="
+echo "== VisionFive 2 Lite : $APP (entry $ENTRY, $NCPU hart(s):$HARTS) =="
 
 # The attach is retried, as in the Milk-V Duo's runner (where a probe's
 # second attach read a garbage scan chain every other time). A failed attach
@@ -133,14 +165,7 @@ for (( attempt = 1; attempt <= ATTACH_TRIES; attempt++ )); do
     "${RESET_ARGS[@]}" \
     -c "foreach n {2 3 4 1} { targets jh7110.cpu\$n; halt }" \
     -c "load_image \"$ELF\" 0 elf" \
-    -c "reg priv 3" \
-    -c "reg pc $PARK" \
-    -c "resume" \
-    -c "sleep 100" \
-    -c "halt" \
-    -c "arm semihosting enable" \
-    -c "reg pc $ENTRY" \
-    -c "resume" \
+    "${START_ARGS[@]}" \
     > >(tee "$LOG") 2>&1 &
   OCD_PID=$!
 

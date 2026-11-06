@@ -1,7 +1,8 @@
 /*
  * riscv-hart.hpp -- which hart is this, and is it inside a trap.
  *
- * A hart is identified by mhartid, 0..OS_NCPU-1 (the board guarantees it: the
+ * A hart is identified by its CPU index, mhartid - RISCV_HART_BASE, 0..OS_NCPU-1
+ * (port_ctx.hpp; the base is 0 except on the JH-7110S; the board guarantees it: the
  * QEMU virt machine and the RP2350's Hazard3 cores number them that way). On
  * a single-hart build the answer is the constant 0 and no CSR is read.
  *
@@ -17,6 +18,7 @@
 
 #include <cstdint>
 
+#include <port_ctx.hpp>
 #include <riscv-csr.hpp>
 
 extern "C"
@@ -33,7 +35,8 @@ namespace riscv
 #if defined(OS_NCPU) && (OS_NCPU > 1)
     reg_t v;
     __asm__ volatile("csrr %0, mhartid" : "=r"(v));
-    return static_cast<unsigned> (v);
+    // The CPU index: mhartid - RISCV_HART_BASE (port_ctx.hpp).
+    return static_cast<unsigned> (v - RISCV_HART_BASE);
 #else
     return 0;
 #endif

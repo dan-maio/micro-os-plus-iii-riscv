@@ -116,6 +116,7 @@ riscv_trap_entry:
 	mv	a0, sp
 #if defined(OS_NCPU) && (OS_NCPU > 1)
 	csrr	t4, mhartid
+	addi	t4, t4, -RISCV_HART_BASE	/* the CPU index (port_ctx.hpp) */
 #else
 	li	t4, 0
 #endif
@@ -137,6 +138,7 @@ riscv_trap_entry:
 	 * trap returns on the hart it was taken on. */
 #if defined(OS_NCPU) && (OS_NCPU > 1)
 	csrr	t4, mhartid
+	addi	t4, t4, -RISCV_HART_BASE
 #else
 	li	t4, 0
 #endif

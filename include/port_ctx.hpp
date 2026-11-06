@@ -46,6 +46,16 @@
 // The "go" word of a secondary hart's release slot (startup.S).
 #define RISCV_SECONDARY_MAGIC 0x53504D47 /* "GMPS" */
 
+// The mhartid of µOS++'s CPU 0. CPU n is mhartid RISCV_HART_BASE + n
+// everywhere the port turns a hart id into an index (riscv-hart.hpp,
+// trap.S, startup.S). 0 on QEMU virt, the Pico 2 and the Duo; 1 on the
+// JH-7110S, whose hart 0 is the S7 monitor core and whose U74 are 1..4
+// (a board define, test/boards/visionfive2-lite/board.cmake). A hart below
+// the base or at/above base + OS_NCPU stays parked.
+#if !defined(RISCV_HART_BASE)
+#define RISCV_HART_BASE 0
+#endif
+
 #if defined(__ASSEMBLER__)
 // Register-sized load/store for trap.S and startup.S.
 #if __riscv_xlen == 64

@@ -1,10 +1,12 @@
 /*
  * The Cortex-M Pico 2 test smp-mat-test (micro-os-plus-iii-cortexm,
  * test/pico2/smp-mat-test), through its RISC-V Pico 2 port, on the
- * VisionFive 2 Lite's U74 hart (mhartid 1): one hart (OS_NCPU = 1, the core-1 launch compiled out),
- * the RP2350 TIMER0 replaced by the CLINT mtime (4 MHz here), the barrier's SIO
- * hardware spinlock by an AMO spinlock, and the RP2350B size (N = 300,
- * B = 50) so the U74's hardware FPU compares with Hazard3's software float.
+ * VisionFive 2 Lite's four U74 harts (mhartid 1..4 = CPUs 0..3, OS_NCPU = 4):
+ * CPUs 1..3 released from the port's park (multicore::launch_core) with
+ * their idle threads idle1..idle3, the RP2350 TIMER0 replaced by the CLINT
+ * mtime (4 MHz), the barrier's SIO hardware spinlock by an AMO spinlock, and
+ * N = 240, B = 30: 8 row blocks, two per core (the RP2350B's N = 300,
+ * B = 50 gives 6). Built for 1 CPU it is the single-hart run.
  */
 /*
  * smp-mat-test (Pico 2 / RP2350) — parallel block linear equation solver,
@@ -59,8 +61,37 @@ using namespace os::rtos;
 #endif
 
 #if OS_NCPU > 1
-#error "this board runs the kernel on one hart"
+#include <multicore.hpp>
+#include <riscv-smp.hpp>
+
+namespace os
+{
+  namespace rtos
+  {
+    namespace scheduler
+    {
+      extern thread* os_idle_thread_core[OS_NCPU];
+    }
+  }
+}
 #endif
+
+// This CPU (the kernel's index) and the hart's own mhartid.
+static unsigned
+current_cpu (void)
+{
+#if OS_NCPU > 1
+  return port_cpu_id ();
+#else
+  return 0;
+#endif
+}
+
+static unsigned
+current_mhartid (void)
+{
+  return static_cast<unsigned> (RISCV_CSR_READ (mhartid));
+}
 
 // ----------------------------------------------------------------------------
 // Time: clint::now () (riscv_board::TIMEBASE_HZ), in microseconds.
@@ -177,8 +208,8 @@ namespace
 // ----------------------------------------------------------------------------
 // Solver dimensions
 // ----------------------------------------------------------------------------
-#define N 300
-#define B 50
+#define N 240 // 8 row blocks of 30: two per core (and a multiple of 1)
+#define B 30  // N must be a multiple of B, N/B a multiple of OS_NCPU
 
 // ----------------------------------------------------------------------------
 // Generation-based spin barrier, protected by an AMO spinlock.
@@ -302,7 +333,9 @@ ThreadPool::start ()
 
       pool_threads[i]
           = new thread (pool_thread_names[i], pool_worker_func, this, attr);
-      // One hart: no affinity to set (the SMP scheduler's cpu_affinity()).
+#if OS_NCPU > 1
+      pool_threads[i]->cpu_affinity (1u << (i % OS_NCPU));
+#endif
     }
 }
 
@@ -357,8 +390,8 @@ pool_demo_task (void* arg)
       sum = sum + i;
     }
   g_pool_print_mutex.lock ();
-  write_fmt ("Thread Pool: Worker executed task %d on CPU %u\n", id,
-             0u /* one hart */);
+  write_fmt ("Thread Pool: Worker executed task %d on CPU %u (mhartid %u)\n",
+             id, current_cpu (), current_mhartid ());
   g_pool_task_count = g_pool_task_count + 1;
   g_pool_print_mutex.unlock ();
 }
@@ -385,6 +418,9 @@ static float LU_k_T[B][B];
 static int pivot_k_T[B];
 
 static thread::stack::element_t solver_stacks[OS_NCPU][1024];
+// The hart each solver thread actually ran on, read from mhartid by the
+// thread itself: the proof that the work was spread over the cores.
+static volatile unsigned solver_mhartid[OS_NCPU];
 static thread* solver_threads[OS_NCPU];
 static char solver_thread_names[OS_NCPU][16];
 
@@ -572,6 +608,17 @@ solver_thread_func (void* arg)
   static float A_kj[OS_NCPU][B][B];
   static float A_ij[OS_NCPU][B][B];
 
+#if OS_NCPU > 1
+  // Pin first, then get there: a new thread runs on whichever core picks
+  // it up before os_main's cpu_affinity() call, and stays there (measured:
+  // solver_c0 on mhartid 4, c1 and c2 both on mhartid 2). As smp-test2.
+  this_thread::thread ().cpu_affinity (1u << core_id);
+  while (current_cpu () != static_cast<unsigned> (core_id))
+    {
+      this_thread::yield ();
+    }
+#endif
+  solver_mhartid[core_id] = current_mhartid ();
   if (core_id == 0)
     {
       g_block_start_us = timer_us32 ();
@@ -753,10 +800,28 @@ solve_classical (const float src_A[N][N], const float src_b[N],
 // ----------------------------------------------------------------------------
 // Main
 // ----------------------------------------------------------------------------
+#if OS_NCPU > 1
+// The idle thread of CPUs 1..3. No wfi on this port: it yields.
+static void*
+secondary_idle_func (void*)
+{
+  this_thread::thread ().priority (thread::priority::idle);
+  while (true)
+    {
+      this_thread::yield ();
+    }
+  return nullptr;
+}
+#endif
+
 int
 os_main (int /*argc*/, char* /*argv*/[])
 {
   using namespace os::rtos;
+#if OS_NCPU > 1
+  // The main thread (it launches the other cores) stays on core 0.
+  this_thread::thread ().cpu_affinity (1u << 0);
+#endif
 
 
   led::init ();
@@ -773,8 +838,33 @@ os_main (int /*argc*/, char* /*argv*/[])
   write_fmt ("  N = %d, B = %d, cores = %d\n", N, B, OS_NCPU);
   write_str ("=============================================\n");
 
-  // One hart: no core 1 to launch (the Pico 2 version registers idle1 and
-  // launches core 1 here).
+#if OS_NCPU > 1
+  // CPUs 1..OS_NCPU-1: each gets its idle thread ("idle<n>", registered in
+  // os_idle_thread_core[n] before the launch), then is released from the
+  // port's park onto its own boot stack.
+  {
+    static thread::stack::element_t idle_stacks[OS_NCPU][512];
+    static char idle_names[OS_NCPU][8];
+    for (unsigned c = 1; c < OS_NCPU; ++c)
+      {
+        thread::attributes attr = thread::initializer;
+        attr.th_stack_address = idle_stacks[c];
+        attr.th_stack_size_bytes = sizeof (idle_stacks[c]);
+        std::snprintf (idle_names[c], sizeof (idle_names[c]), "idle%u", c);
+        os::rtos::scheduler::os_idle_thread_core[c]
+            = new thread (idle_names[c], secondary_idle_func, nullptr, attr);
+      }
+    for (unsigned c = 1; c < OS_NCPU; ++c)
+      {
+        write_fmt ("core 0: launching core %u (mhartid %u)...\n", c,
+                   c + RISCV_HART_BASE);
+        multicore::launch_core (c, port_smp_secondary_start,
+                                port_secondary_stack_top (c));
+      }
+    port_smp_core0_ipi_enable ();
+    write_str ("core 0: all cores launched; SMP running.\n");
+  }
+#endif
 
   // ---- Thread Pool demo ----------------------------------------------------
   write_str ("Starting Thread Pool of 10 worker threads...\n");
@@ -847,7 +937,7 @@ os_main (int /*argc*/, char* /*argv*/[])
     }
 
   // ---- Launch the parallel solver threads ----------------------------------
-  write_str ("Starting parallel 2-core block elimination...\n");
+  write_fmt ("Starting parallel %d-core block elimination...\n", OS_NCPU);
   for (int c = 0; c < OS_NCPU; ++c)
     {
       thread::attributes attr = thread::initializer;
@@ -859,6 +949,9 @@ os_main (int /*argc*/, char* /*argv*/[])
       solver_threads[c]
           = new thread (solver_thread_names[c], solver_thread_func,
                         reinterpret_cast<void*> (static_cast<std::intptr_t> (c)), attr);
+#if OS_NCPU > 1
+      solver_threads[c]->cpu_affinity (1u << c);
+#endif
     }
 
   bool led_state = false;
@@ -941,10 +1034,17 @@ os_main (int /*argc*/, char* /*argv*/[])
   write_str ("x\n");
   write_str ("+---------------------------------------------------+\n");
 
-  bool pass = (max_diff < 0.01f);
+  // Each solver thread c must have run on CPU c (mhartid c + RISCV_HART_BASE).
+  bool cores_ok = true;
+  for (unsigned c = 0; c < OS_NCPU; ++c)
+    {
+      write_fmt ("  solver_c%u ran on mhartid %u\n", c, solver_mhartid[c]);
+      cores_ok = cores_ok && (solver_mhartid[c] == c + RISCV_HART_BASE);
+    }
+  bool pass = (max_diff < 0.01f) && cores_ok;
   write_fmt ("RESULT: %s\n",
-             pass ? "PASS (block == classical within tolerance)"
-                  : "FAIL");
+             pass ? "PASS (block == classical within tolerance, one solver per core)"
+                  : (cores_ok ? "FAIL (solutions differ)" : "FAIL (a solver ran on the wrong core)"));
   write_str ("---------------------------------------------\n");
 
   // End the run with the verdict (semihosting exit).

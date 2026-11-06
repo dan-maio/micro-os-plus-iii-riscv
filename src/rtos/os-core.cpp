@@ -772,6 +772,20 @@ extern "C"
         &secondary_boot_stack[0][secondary_boot_stack_words]);
   }
 
+  // The boot stack of secondary CPU `cpu` (1..OS_NCPU-1), for boards with
+  // more than one secondary (the VisionFive 2 Lite's four U74s); 0 for any
+  // other value.
+  std::uintptr_t
+  port_secondary_stack_top (unsigned cpu)
+  {
+    if (cpu == 0 || cpu >= OS_NCPU)
+      {
+        return 0;
+      }
+    return reinterpret_cast<std::uintptr_t> (
+        &secondary_boot_stack[cpu - 1][secondary_boot_stack_words]);
+  }
+
   // Release secondary hart `hart`, parked in startup.S: write its entry
   // and stack, then the magic (the hart reads the magic first). For boards
   // where every hart enters at _start (QEMU virt); a board whose ROM holds

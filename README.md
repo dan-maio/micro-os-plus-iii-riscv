@@ -12,8 +12,9 @@ Pico 2*, *SMP* and *Pico 2 hardware* below. Third board: **WeAct RP2350B**
 (16 MB flash, 8 MB QSPI PSRAM) -- the Pico 2's sources with the data in the
 PSRAM, the clock table and the 250 MHz overclock; see *WeAct RP2350B*.
 Fourth board: **StarFive VisionFive 2 Lite** (JH-7110S, four SiFive U74
-RV64GC harts + one S7 monitor hart), µOS++ on one U74 in M-mode, every test
-loaded into and run from DDR -- see *StarFive VisionFive 2 Lite*.
+RV64GC harts + one S7 monitor hart), µOS++ SMP on the four U74 in M-mode
+(mhartid 1..4 = CPUs 0..3), every test loaded into and run from DDR -- see
+*StarFive VisionFive 2 Lite*.
 
 ## Layout
 
@@ -51,7 +52,7 @@ micro-os-plu-iii-smp-riscv-pr-github/       the workspace
         │                                   hw.sh, qemu.sh
         ├── boards/visionfive2-lite/        board.cmake, linker.ld (DDR),
         │                                   jh7110_daplink.cfg, hw.sh,
-        │                                   include/, src/
+        │                                   include/ (multicore.hpp), src/
         ├── milkv-duo/, pico2/,             one directory per test application
         ├── pico2-rp2350b-psram/
         └── visionfive2-lite/
@@ -270,8 +271,10 @@ reset!`), so the verdict is the `RESULT` line on the UART, not `hw.sh`'s exit.
 
 JH-7110S: a U74-MC complex -- hart 0 is the S7 monitor core (rv64imac, no
 MMU, not used), harts 1..4 are SiFive U74 (`rv64imafdc_zba_zbb`, Sv39).
-µOS++ runs on **hart 1** in M-mode, `OS_NCPU = 1`; harts 2..4 stay
-debug-halted. The board is left at the **U-Boot prompt** (SPL has trained
+µOS++ runs in M-mode on **all four U74** for the SMP tests (smp-test2,
+smp-mat-test: `OS_NCPU = 4`, CPU n = mhartid n + 1, `RISCV_HART_BASE = 1`)
+and on hart 1 alone for the others (`OS_NCPU = 1`, harts 2..4 debug-halted);
+`test/visionfive2-lite/tests.cmake` chooses per test, as the Pico 2's does. The board is left at the **U-Boot prompt** (SPL has trained
 the DDR, U-Boot has set up UART0); OpenOCD loads each test into DDR at
 `0x40200000` and starts it there -- nothing is written to flash or SD.
 Build: `cmake -S . -B test/build-vf2 -G Ninja -D BOARD=visionfive2-lite -D
@@ -285,8 +288,9 @@ only (no QEMU stand-in).
 | memory | `linker.ld`: everything -- code, data, stacks, heap, page tables -- in a 32 MiB DDR window at `0x40200000` (OpenSBI's `FW_JUMP_ADDR`); OpenSBI at `0x40000000` is left alone |
 | timebase | 4 MHz (`timebase-frequency`) |
 | CLINT | `0x02000000`, standard SiFive (64-bit `mtimecmp`/`mtime`). The U7 manual lists no `time` CSR, so the clock is **`mtime` over MMIO** (`TIME_CSR = false`, `MTIME_READABLE = true`); measured by clock-test: `sleep_for(100)` = 99 999 µs, 1000 ticks = 999 999 µs |
-| hart index | the CLINT is indexed by mhartid (hart 0 = S7); the board's `BOOT_HART = 1` offsets `CLINT_MSIP`/`CLINT_MTIMECMP` to hart 1's slot, so the port's hart 0 is mhartid 1 and no port code changed |
-| PLIC | `0x0C000000`, 136 sources; contexts in `interrupts-extended` order (0 = hart 0 M, then M and S per U74): hart 1 M-mode = **context 1**; start-up disables its sources and sets the threshold to 7 |
+| hart index | the port's CPU index is `mhartid - RISCV_HART_BASE` (`include/port_ctx.hpp`; 0 on every other board, 1 here, a board define) in `riscv::this_hart()`, `trap.S` (nesting count, IRQ stack) and `startup.S` (which hart boots, the secondary park and release slot; harts below the base or beyond the last CPU stay parked). The CLINT is indexed by mhartid (hart 0 = S7): `BOOT_HART = RISCV_HART_BASE` offsets `CLINT_MSIP`/`CLINT_MTIMECMP`, so CPU n uses hart n+1's `msip`/`mtimecmp` |
+| SMP | CPUs 1..3 park in `startup.S` (`riscv_secondary_park`) and are released by `multicore::launch_core(n, port_smp_secondary_start, port_secondary_stack_top(n))` (`include/multicore.hpp`), after their idle threads `idle1..idle3` are registered in `os_idle_thread_core[]`. Fixed for an FPU SMP board: `startup.S` now enables the FPU (`mstatus.FS`) on every hart **before** the secondaries park -- the trap entry saves the FP registers, so a secondary with FS = Off would fault on its first trap (QEMU rv32 and the Pico 2 have no FPU). A thread pinned with `cpu_affinity()` after creation can be picked up by another core first and stay there (measured in smp-mat-test: solver_c0 on mhartid 4): the tests' threads pin themselves first and yield until they are on their core |
+| PLIC | `0x0C000000`, 136 sources; contexts in `interrupts-extended` order (0 = hart 0 M, then M and S per U74): hart h's M-mode context is **2h - 1** (1, 3, 5, 7); start-up (CPU 0, before any release) disables the sources and sets the threshold to 7 on all four |
 | MMU | standard Sv39 PTEs (no T-Head attributes): CLINT, PLIC, UART0..2, sys_syscon/sysgpio, aon_syscon/aongpio, and the first GiB of DDR. mmu-test's alias moved to `0x80000000` (`0x40000000` is mapped DDR here) |
 | misaligned | the U74 traps misaligned loads/stores (U7 manual, data memory system): mmu-test's misaligned step is not run |
 | console | UART0 `0x10000000` (DW 8250, reg-shift 2), GPIO5 TX / GPIO6 RX, 115200 8N1 as U-Boot left it (the divisor is kept) |
@@ -301,7 +305,7 @@ everything below was measured on the board (2026-11-06).
 | | |
 |---|---|
 | probe | DAPLink **0d28:0204**, firmware 0255, **CMSIS-DAP v1 (HID only)**. The cfg also accepts the Sipeed d6e7:3507 (CMSIS-DAP v2, bulk, ~40 KiB/s on the Duo) first, if it is plugged in |
-| speed | HID costs one 1 ms USB frame per debug-module word: **3.3 KiB/s** loads (44 KiB in 13.4 s), ~**0.8 s per semihosting call**. Neither TCK (2, 4, 10 MHz all 13.4 s) nor the access path (system bus: same load, slower verify; abstract memory access: not supported) changes it. A test takes 50..95 s; smp-mat-test (1.3 MiB) ~7 min of load |
+| speed | HID costs one 1 ms USB frame per debug-module word: **3.3 KiB/s** loads (44 KiB in 13.4 s), ~**0.8 s per semihosting call**. Neither TCK (2, 4, 10 MHz all 13.4 s) nor the access path (system bus: same load, slower verify; abstract memory access: not supported) changes it. A test takes 1..7 min, mostly its console lines |
 | scan chain | two TAPs as in the original cfg (E24, then U74-MC), but **both read IDCODE `0x07110cfd`**: the expected `0x20000c2f` of the first is not what the chip reports. OpenOCD complains and uses the chain anyway; debugging works |
 | debug module | 5 harts (`found 5 harts`), `misa 0x800000000094112f`, progbuf 16, datacount 2; abstract CSR reads/writes unsupported (OpenOCD falls back to the progbuf) |
 | targets | four **independent** targets `jh7110.cpu1..4` (`-coreid 1..4`); no `init`/`halt`/`echo` at the end (hw.sh drives the session) |
@@ -309,7 +313,8 @@ everything below was measured on the board (2026-11-06).
 | `reset halt` | optional (`HW_RESET=1 hw.sh <test>`): measured not to touch DDR or UART0 (LCR stays 0x03), and the chip stays stable after it; the default is a plain halt of the U-Boot-booted board. U-Boot's `starfive_visionfive2_defconfig` enables no watchdog |
 | **semihosting state** | a hart left halted on the **previous** session's semihosting `exit` ebreak (`dcsr.cause = 1`) did **not** halt on its semihosting ebreaks in the next session, although `dcsr.ebreakm` read 1: runs strictly alternated PASS / hang (UART showing PASS, OpenOCD seeing nothing). `hw.sh` therefore loads the image, runs hart 1 on `riscv_board_park` for 100 ms and stops it with a halt request (`dcsr.cause = 3`) before `reg pc _start; resume` -- then 4/4 back-to-back PASS |
 | console copy | `src/uart.cpp` copies each console write to semihosting with **`SYS_WRITE`** (one bulk read of the buffer), not `SYS_WRITE0` (one probe round trip per byte, which on this probe ended in link errors) |
-| session | `init` -> halt harts 2, 3, 4, 1 -> `load_image` -> `reg priv 3` -> park, resume, 100 ms, halt -> `arm semihosting enable` -> `reg pc <entry>` -> `resume`. The verdict is the semihosting exit (OpenOCD's exit status) checked against the `RESULT` line |
+| session | `init` -> halt harts 2, 3, 4, 1 -> `load_image` -> for each hart the image drives: `reg priv 3`, park, resume, 100 ms, halt, `arm semihosting enable` -> (SMP) clear the release slots, `reg pc <entry>; resume` on harts 2..n (they park) -> `reg pc <entry>; resume` on hart 1. The verdict is the semihosting exit (OpenOCD's exit status) checked against the `RESULT` line |
+| SMP images | detected from `riscv_secondary_boot` (NCPU = its size / 24). Its slots are **cleared through OpenOCD** before the harts start: the DDR keeps the previous run's, and a stale magic would release a hart before CPU 0 has set it up. Semihosting is enabled on every target: threads on any core print, and each hart halts on its own ebreak |
 | diagnostics | every run keeps a timestamped log in `test/build-vf2/.hw-logs/`; on a timeout `hw.sh` asks the live OpenOCD (Tcl port 6666) for hart 1's `pc mcause mepc mtval ra sp mstatus dcsr` and the port's `riscv_semihosting_absent` before stopping it |
 | wiring | 40-pin header: TMS 35, TCK 37, TDI 38, TDO 40, GND 39 (pin 36 = reset, not used); console UART0 TX pin 8, RX pin 10 |
 
@@ -432,11 +437,23 @@ separate, non-coherent core); `sd_test`.
 ### Status (2026-11-06)
 
 StarFive VisionFive 2 Lite (DAPLink, full console over semihosting, every
-test in DDR): **9/9 PASS** -- smp_test0 (4 back-to-back runs), semihosting-test,
-clock-test, clock-catchup (sysclock 1500 ms vs mtime 1499 ms), mmu-test,
-exc-test (50 illegal + 50 ecall traps, registers intact), mos-test1,
-sc-test-ko, smp-test1. smp-mat-test built, not run (1.3 MiB, ~7 min load with
-this probe).
+test in DDR): **11/11 PASS**.
+- SMP on the four U74 (`OS_NCPU = 4`):
+  - **smp-test2**: one worker per core, every beat read from mhartid on its
+    own hart (8/8 each), global 32;
+  - **smp-mat-test** (N = 240, B = 30, 8 blocks): solvers c0..c3 on mhartid
+    1..4, parallel 15.9 ms against classical 60.3 ms on core 0 (**3.80x**),
+    max difference 0; thread-pool tasks spread over CPUs 0..3. (N = 200,
+    B = 50: 12.6 ms against 34.8 ms, 2.76x.)
+- One hart (`OS_NCPU = 1`): smp_test0 (4 back-to-back runs), semihosting-test,
+  clock-test, clock-catchup (sysclock 1500 ms vs mtime 1499 ms), mmu-test,
+  exc-test (50 illegal + 50 ecall traps, registers intact), mos-test1,
+  sc-test-ko, smp-test1.
+- A run takes 1..7 min, mostly the console over semihosting (~0.8 s per line
+  with this probe); the image load is 13..17 s (only the loadable part).
+- The port changes for it (`RISCV_HART_BASE`, the FPU on every hart before
+  the park, `port_secondary_stack_top()`) leave the other boards as they
+  were: Duo QEMU 11/11, Pico 2 QEMU 4/4 (2-hart SMP included).
 
 RV32 (phase 1 of the Pico 2 port): the Duo's tests built for the RV32 stand-in
 (`test/build-rv32`): **7 passed, mmu-test skipped** (no MMU on RV32). RV64

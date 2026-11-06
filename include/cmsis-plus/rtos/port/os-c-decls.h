@@ -49,8 +49,9 @@ typedef struct
  * no default here: a board that does not say how many CPUs it has does not
  * compile. The Milk-V Duo runs µOS++ on its one main C906 hart (OS_NCPU=1;
  * its "little" C906 is not driven by this port); the Pico 2 runs it on both
- * Hazard3 harts (OS_NCPU=2, OS_USE_SMP_SCHEDULER). A hart is identified by
- * mhartid, which must be 0..OS_NCPU-1. */
+ * Hazard3 harts (OS_NCPU=2, OS_USE_SMP_SCHEDULER); the VisionFive 2 Lite on
+ * its four U74 harts (mhartid 1..4). A hart is identified by its CPU index,
+ * mhartid - RISCV_HART_BASE (port_ctx.hpp), which must be 0..OS_NCPU-1. */
 #ifndef OS_NCPU
 #error "OS_NCPU is a board fact: set UOS_BOARD_NCPU in test/boards/<board>/board.cmake."
 #endif

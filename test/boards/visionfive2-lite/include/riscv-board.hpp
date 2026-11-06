@@ -27,14 +27,16 @@
 #include <cstdint>
 
 #include <mmu.hpp>
+#include <port_ctx.hpp>
 
 namespace riscv_board
 {
-  // The hart µOS++ runs on: hw.sh starts the image on OpenOCD target
-  // jh7110.cpu1 (-coreid 1 = mhartid 1). The port numbers its harts from 0,
-  // so the CLINT's per-hart registers below start at this hart's slot:
-  // the port's hart 0 is the CLINT's hart BOOT_HART.
-  inline constexpr unsigned BOOT_HART = 1u;
+  // µOS++'s CPU 0 is mhartid RISCV_HART_BASE (= 1, board.cmake; the port's
+  // include/port_ctx.hpp): CPU n is the U74 with mhartid n + 1. The port
+  // indexes the CLINT's per-hart registers by CPU, so they start at hart
+  // BOOT_HART's slot below.
+  inline constexpr unsigned BOOT_HART = RISCV_HART_BASE;
+  static_assert (BOOT_HART == 1u, "the U74s are mhartid 1..4");
 
   inline constexpr std::uintptr_t CLINT_BASE = 0x02000000u;
   inline constexpr std::uintptr_t CLINT_MSIP_STRIDE = 4u;
@@ -56,7 +58,13 @@ namespace riscv_board
   inline constexpr std::uintptr_t PLIC_BASE = 0x0C000000u;
   // PLIC contexts, in interrupts-extended order: 0 = hart 0 M, then M and S
   // for each U74 hart -> hart h's M-mode context is 2h - 1.
-  inline constexpr unsigned PLIC_M_CONTEXT = 2u * BOOT_HART - 1u;
+  constexpr unsigned
+  plic_m_context (unsigned mhartid)
+  {
+    return 2u * mhartid - 1u;
+  }
+  inline constexpr unsigned PLIC_M_CONTEXT = plic_m_context (BOOT_HART);
+  inline constexpr unsigned U74_FIRST = 1u, U74_LAST = 4u;
 
   // A standard Sv39 hart: no vendor PTE attributes.
   inline constexpr std::uint64_t FLAGS_RAM = mmu::FLAGS_RAM;

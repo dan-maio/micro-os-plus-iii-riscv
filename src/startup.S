@@ -31,16 +31,10 @@ _start:
 	.option pop
 	mv	tp, zero
 
-#if defined(OS_NCPU) && (OS_NCPU > 1)
-	/* Every hart but 0 waits to be released (riscv_secondary_park). */
-	csrr	t0, mhartid
-	bnez	t0, riscv_secondary_park
-#endif
-
-	/* The boot stack: main() runs on it until the scheduler starts. */
-	la	sp, __stack_top
-
-	/* MPRV off; with an FPU: FPU on (FS = Initial), clean rounding state. */
+	/* MPRV off; with an FPU: FPU on (FS = Initial), clean rounding state.
+	 * On EVERY hart, before the secondaries park: the trap entry saves the
+	 * FP registers, so a secondary with FS = Off would take an illegal
+	 * instruction on its first trap (an FPU SMP board: the U74s). */
 	li	t0, (1 << 17)
 	csrc	mstatus, t0
 #if defined(__riscv_flen)
@@ -51,8 +45,20 @@ _start:
 	fscsr	zero
 #endif
 
-	/* The image was just written by the debugger: drop stale I-cache lines. */
+	/* The image was just written by the debugger: drop stale I-cache lines
+	 * (each hart has its own I-cache). */
 	fence.i
+
+#if defined(OS_NCPU) && (OS_NCPU > 1)
+	/* Every hart but CPU 0 (mhartid RISCV_HART_BASE) waits to be released
+	 * (riscv_secondary_park). */
+	csrr	t0, mhartid
+	li	t1, RISCV_HART_BASE
+	bne	t0, t1, riscv_secondary_park
+#endif
+
+	/* The boot stack: main() runs on it until the scheduler starts. */
+	la	sp, __stack_top
 
 	/* External memory before anything is written to it: a board whose
 	 * .data/.bss live outside on-chip RAM (the RP2350B's QSPI PSRAM)
@@ -109,11 +115,19 @@ riscv_board_initialize_memory:
  * (riscv_smp_release_hart(), os-core.cpp), and jumps to the entry on that
  * stack. It reads nothing else: hart 0 is meanwhile zeroing .bss (the slot
  * included) and running the constructors. A hart this build does not drive
- * (mhartid >= OS_NCPU) stays parked. No wfi, as everywhere in this port. */
+ * (CPU index mhartid - RISCV_HART_BASE outside 0..OS_NCPU-1; below the base
+ * the subtraction wraps and the unsigned compare parks it too) stays
+ * parked. No wfi, as everywhere in this port.
+ *
+ * The slot must not hold a stale magic when a hart arrives here: QEMU's RAM
+ * starts zeroed; on a board whose DDR keeps the previous run, the loader
+ * clears riscv_secondary_boot[] before it starts the harts
+ * (test/boards/visionfive2-lite/hw.sh). */
 	.globl	riscv_secondary_park
 	.type	riscv_secondary_park, @function
 riscv_secondary_park:
 	csrr	t0, mhartid
+	addi	t0, t0, -RISCV_HART_BASE
 	li	t1, OS_NCPU
 	bgeu	t0, t1, 9f
 	li	t1, (3 * PORT_REGBYTES)

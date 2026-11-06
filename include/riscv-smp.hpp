@@ -20,6 +20,8 @@ extern "C"
   void port_smp_ipi (unsigned cpu);
   void port_smp_secondary_start (void);
   std::uintptr_t port_core1_stack_top (void);
+  // The boot stack of secondary CPU 1..OS_NCPU-1 (0 otherwise).
+  std::uintptr_t port_secondary_stack_top (unsigned cpu);
   void port_smp_core0_ipi_enable (void);
   // Boards whose harts all enter at _start (QEMU virt): release one.
   void riscv_smp_release_hart (unsigned hart, void (*entry) (void),
