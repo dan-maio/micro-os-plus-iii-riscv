@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <clocks.hpp>
 #include <rp2350.hpp>
 #include <riscv-csr.hpp>
 #include <riscv-hart.hpp>
@@ -34,7 +35,7 @@ namespace
 {
   constexpr std::uint32_t DR = 0x00, FR = 0x18, IBRD = 0x24, FBRD = 0x28,
                           LCRH = 0x2C, CR = 0x30, IMSC = 0x38, ICR = 0x44;
-  constexpr std::uint32_t FR_TXFF = 1u << 5;
+  constexpr std::uint32_t FR_TXFF = 1u << 5, FR_RXFE = 1u << 4;
   constexpr std::uint32_t GPIO_FUNC_UART0 = 2;
   constexpr std::uint32_t PADS_ISO = 1u << 8, PADS_IE = 1u << 6;
   constexpr std::uint32_t RESET_UART0 = 1u << 26, RESET_IO_BANK0 = 1u << 6,
@@ -139,7 +140,7 @@ namespace uart
     reg (u + CR) = 0;
     reg (u + ICR) = 0x7FF;
     // PL011: divisor = clk_peri / (16 * baud), FBRD the rounded fraction * 64.
-    const std::uint32_t clk = rp2350::SYS_CLK_HZ;
+    const std::uint32_t clk = clocks::current_khz () * 1000u;
     const std::uint32_t d16 = 16u * baud;
     std::uint32_t ibrd = clk / d16;
     std::uint32_t fbrd = ((clk % d16) * 64u + d16 / 2u) / d16;
@@ -190,6 +191,16 @@ namespace uart
 #if defined(HW_BUILD) && defined(SEMIHOST)
     semi_copy (s, n);
 #endif
+  }
+
+  int __attribute__ ((weak))
+  get_char (void)
+  {
+    if (reg (rp2350::UART0_BASE + FR) & FR_RXFE)
+      {
+        return -1;
+      }
+    return static_cast<int> (reg (rp2350::UART0_BASE + DR) & 0xFFu);
   }
 } // namespace uart
 

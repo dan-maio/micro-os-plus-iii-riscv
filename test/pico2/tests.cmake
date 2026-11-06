@@ -6,12 +6,12 @@
 # was built for); the single-core ones run on one.
 # -----------------------------------------------------------------------------
 
-set (_pico2_smp_tests smp-test2 smp-test3 smp-test4 smp-test5 smp-test-ko smp-mat-test
+set (_pico2_smp_tests smp-test2 smp-test3 smp-test4 smp-test5 smp-test-ko smp-mat-test smp-test-nested
      smp-mat-test-ram smp-test-usb-cdc-acm smp-test-usb-hid)
 
 # Tests that program RP2350 peripherals directly (TIMER0, SIO): hardware
 # only, as on the Cortex-M Pico 2 board.
-set (BOARD_TEST_HWD_ONLY smp-test0 smp-test3 smp-test4 smp-test5 smp-test-ko smp-mat-test
+set (BOARD_TEST_HWD_ONLY smp-test0 smp-test3 smp-test4 smp-test5 smp-test-ko smp-mat-test smp-test-nested
      smp-mat-test-ram cmsis-os-validator-ram mutex-stress-ram rtos-apis-ram
      smp-test-usb-cdc-acm smp-test-usb-hid)
 

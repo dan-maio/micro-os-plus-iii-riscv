@@ -27,4 +27,8 @@ namespace uart
 
   void
   write (const char* s, std::size_t n);
+
+  // One received byte, or -1 when the RX FIFO is empty (never blocks).
+  int
+  get_char (void);
 } // namespace uart

@@ -26,12 +26,14 @@
 #include <clint.hpp>
 #include <cmsis_device.h>
 #include <riscv-csr.hpp>
+#include <riscv-amo.hpp>
 #include <riscv-hart.hpp>
 
 extern "C"
 {
-  volatile std::uint32_t riscv_soft_irq_enabled = 0;
-  volatile std::uint32_t riscv_soft_irq_pending = 0;
+  // Changed with AMOs: kept where AMOs work (riscv-amo.hpp).
+  volatile std::uint32_t riscv_soft_irq_enabled RISCV_AMO_BSS = 0;
+  volatile std::uint32_t riscv_soft_irq_pending RISCV_AMO_BSS = 0;
 
   void __attribute__ ((weak)) riscv_soft_irq_handler (unsigned line)
   {

@@ -54,6 +54,12 @@ _start:
 	/* The image was just written by the debugger: drop stale I-cache lines. */
 	fence.i
 
+	/* External memory before anything is written to it: a board whose
+	 * .data/.bss live outside on-chip RAM (the RP2350B's QSPI PSRAM)
+	 * brings that memory up here, on the boot stack, with nothing of .data
+	 * or .bss usable yet. The default does nothing. */
+	call	riscv_board_initialize_memory
+
 	/* .data from its load address, for an image that runs from flash (the
 	 * Pico 2); an image loaded into RAM has them equal and skips this. */
 	la	t0, __data_load
@@ -86,6 +92,14 @@ _start:
 
 3:	j	3b
 	.size	_start, . - _start
+
+/* The default memory hook: nothing outside on-chip RAM to bring up. A board
+ * overrides it (test/boards/pico2/src/psram.cpp with PICO2_PSRAM). */
+	.weak	riscv_board_initialize_memory
+	.type	riscv_board_initialize_memory, @function
+riscv_board_initialize_memory:
+	ret
+	.size	riscv_board_initialize_memory, . - riscv_board_initialize_memory
 
 #if defined(OS_NCPU) && (OS_NCPU > 1)
 /* A secondary hart that entered at _start (QEMU virt with -bios none starts

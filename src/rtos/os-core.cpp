@@ -46,6 +46,7 @@
 
 #include <clint.hpp>
 #include <port_ctx.hpp>
+#include <riscv-amo.hpp>
 #include <riscv-board.hpp>
 #include <riscv-csr.hpp>
 
@@ -400,7 +401,8 @@ namespace os
       {
 #if defined(OS_USE_SMP_SCHEDULER)
         volatile state_t lock_state[OS_NCPU];
-        os_port_smp_klock_t smp_klock = { 0, SMP_NO_OWNER, 0 };
+        // Taken with amoswap: kept where AMOs work (riscv-amo.hpp).
+        os_port_smp_klock_t smp_klock RISCV_AMO_DATA = { 0, SMP_NO_OWNER, 0 };
         namespace
         {
           // The MIE state to restore when the scheduler lock is released.
@@ -547,12 +549,17 @@ namespace os
           if (riscv_trap_nesting[h] != 0)
             {
               // From a trap: the switch is made on the way out of this
-              // hart's outermost trap (riscv_port_switch_due()).
+              // hart's outermost trap (riscv_port_switch_due()). A nested
+              // interrupt handler may run with MIE set: give it back.
               if (rtos::scheduler::preemptive ())
                 {
                   riscv_port_pending[h] = true;
                 }
-              return; // MIE was clear (a trap)
+              if (s)
+                {
+                  riscv::csr::mstatus_set_mie ();
+                }
+              return;
             }
 
           if (!s)

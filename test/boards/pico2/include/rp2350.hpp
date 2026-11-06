@@ -20,6 +20,9 @@ namespace rp2350
   inline constexpr std::uint32_t PADS_BANK0_BASE = 0x40038000u;
   inline constexpr std::uint32_t XOSC_BASE = 0x40048000u;
   inline constexpr std::uint32_t PLL_SYS_BASE = 0x40050000u;
+  inline constexpr std::uint32_t PLL_USB_BASE = 0x40058000u;
+  inline constexpr std::uint32_t ADC_BASE = 0x400A0000u;
+  inline constexpr std::uint32_t POWMAN_BASE = 0x40100000u; // core VREG
   inline constexpr std::uint32_t UART0_BASE = 0x40070000u;
   inline constexpr std::uint32_t QMI_BASE = 0x400D0000u;
   inline constexpr std::uint32_t WATCHDOG_BASE = 0x400D8000u;
@@ -54,10 +57,27 @@ namespace rp2350
 
   // Board facts (Raspberry Pi Pico 2).
   inline constexpr std::uint32_t XOSC_HZ = 12000000u;
+  // The default clk_sys; the running one is clocks::current_khz().
   inline constexpr std::uint32_t SYS_CLK_HZ = 150000000u;
-  inline constexpr std::uint32_t LED_PIN = 25u;
-  inline constexpr std::uint32_t UART_TX_PIN = 0u; // GPIO0, function 2
-  inline constexpr std::uint32_t UART_RX_PIN = 1u; // GPIO1, function 2
+
+  // RP2350B potentiometer: ADC channels 0..7 are GPIO40..47; the wiper on
+  // GPIO40 = ADC0, the ends on 3V3 and GND.
+  inline constexpr std::uint32_t ADC_POT_PIN = 40u;
+  inline constexpr std::uint32_t ADC_POT_CHANNEL = 0u;
+  // Pins: the Pico 2's by default; a board that shares these sources (the
+  // WeAct RP2350B: UART0 on GPIO12/13) sets them in its board.cmake.
+#if !defined(PICO2_LED_PIN)
+#define PICO2_LED_PIN 25
+#endif
+#if !defined(PICO2_UART_TX_PIN)
+#define PICO2_UART_TX_PIN 0
+#endif
+#if !defined(PICO2_UART_RX_PIN)
+#define PICO2_UART_RX_PIN 1
+#endif
+  inline constexpr std::uint32_t LED_PIN = PICO2_LED_PIN;
+  inline constexpr std::uint32_t UART_TX_PIN = PICO2_UART_TX_PIN; // function 2
+  inline constexpr std::uint32_t UART_RX_PIN = PICO2_UART_RX_PIN; // function 2
   // SIO hardware spinlock used to serialise the console between the harts
   // (the kernel lock is an AMO and uses none of them).
   inline constexpr std::uint32_t UART_SPINLOCK = SIO_SPINLOCK0 + 4u * 1u;

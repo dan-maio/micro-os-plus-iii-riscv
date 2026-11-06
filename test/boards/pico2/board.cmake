@@ -18,6 +18,15 @@ set (UOS_BOARD_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}")
 set (UOS_BOARD_FLAGS
      -march=rv32ima_zicsr_zifencei_zba_zbb_zbs_zbkb_zca_zcb_zcmp -mabi=ilp32
      -mcmodel=medany)
+# The libraries (libgcc, newlib, libstdc++) to link. The toolchain has no
+# multilib for the -march above, and the closest it picks by itself is
+# rv32ia/ilp32 -- no M: libgcc's software float then multiplies through a
+# shift-and-add __mulsi3, four calls per float multiply (measured in
+# smp-mat-test). rv32imc/ilp32 has the same ABI and uses mul. Link only: the
+# code itself keeps the full Hazard3 -march (A, Zb*, Zc*). Hazard3 has no FPU,
+# so float stays in software either way.
+set (UOS_BOARD_LINK_FLAGS -march=rv32imc_zicsr_zifencei)
+
 set (UOS_BOARD_NCPU 2)
 
 set (UOS_BOARD_CAPS smp led uart semihosting)

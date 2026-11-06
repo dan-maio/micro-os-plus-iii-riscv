@@ -125,7 +125,7 @@ set (_uos_riscv_port_sources
 # stand-in carries its own script; a real board's script is chosen per
 # variant by test/CMakeLists.txt instead.
 function (uos_riscv_add_port _name _board_dir)
-  cmake_parse_arguments (P "" "LINKER" "FLAGS;DEFINES;LIBS" ${ARGN})
+  cmake_parse_arguments (P "" "LINKER" "FLAGS;LINK_FLAGS;DEFINES;LIBS" ${ARGN})
 
   file (GLOB _bsrc CONFIGURE_DEPENDS
         "${_board_dir}/src/*.c" "${_board_dir}/src/*.cpp" "${_board_dir}/src/*.S")
@@ -148,6 +148,11 @@ function (uos_riscv_add_port _name _board_dir)
     # One RAM region holds text and data (the image is loaded into DDR and
     # runs there), so the single LOAD segment is RWX by construction.
     "LINKER:--no-warn-rwx-segments")
+  # Link-only flags, after FLAGS: the last -march chooses the multilib
+  # (board.cmake, UOS_BOARD_LINK_FLAGS).
+  if (P_LINK_FLAGS)
+    target_link_options (${_name}-board-interface INTERFACE ${P_LINK_FLAGS})
+  endif ()
   if (P_LINKER)
     target_link_options (${_name}-board-interface INTERFACE "-T${P_LINKER}")
   endif ()
@@ -181,6 +186,7 @@ endfunction ()
 # The selected board.
 uos_riscv_add_port (micro-os-plus-iii-riscv "${UOS_BOARD_SRC_DIR}"
                     FLAGS ${UOS_BOARD_FLAGS}
+                    LINK_FLAGS ${UOS_BOARD_LINK_FLAGS}
                     DEFINES ${UOS_BOARD_DEFINES}
                     LIBS ${UOS_BOARD_LIBS})
 add_library (micro-os-plus::riscv ALIAS micro-os-plus-iii-riscv-interface)
@@ -206,6 +212,9 @@ set (UOS_RISCV_RV32_FLAGS
 uos_riscv_add_port (micro-os-plus-iii-riscv-qemu-virt32
                     "${CMAKE_CURRENT_SOURCE_DIR}/qemu/virt"
                     FLAGS ${UOS_RISCV_RV32_FLAGS}
+                    # The libraries with M, as the Pico 2 board links them
+                    # (test/boards/pico2/board.cmake).
+                    LINK_FLAGS -march=rv32imc_zicsr_zifencei
                     DEFINES SEMIHOST_TRAP_CHOSEN
                             "PORT_GREETING=\"µOS++ QEMU virt (RV32IMAC, Hazard3 code)\""
                     LINKER "${CMAKE_CURRENT_SOURCE_DIR}/qemu/virt/linker.ld")

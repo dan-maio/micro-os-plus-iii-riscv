@@ -15,12 +15,14 @@
  *   NVIC_SetPriority (n, p)          meipra = 15 - p (Arm: lower is more
  *                                    urgent; Hazard3: higher is)
  *   the trap's external interrupt    riscv_board_external_interrupt(): loop
- *                                    on meinext, call <NAME>_Handler
+ *                                    on meinext, call <NAME>_Handler with
+ *                                    MIE set -- higher-priority IRQs PREEMPT
  *
  * Handlers have the Cortex-M vector names (UART0_IRQ_Handler,
  * USBCTRL_IRQ_Handler, SIO_IRQ_FIFO_Handler, ...), weak; an unhandled IRQ
- * is disabled on this core so it cannot storm. Traps do not nest on this
- * port, so priorities only order the pending ones.
+ * is disabled on this core so it cannot storm. External interrupts nest by
+ * priority (meicontext.preempt); the timer and software interrupts do not
+ * preempt them.
  *
  * Copyright (c) 2026 Dan. MIT license.
  */
@@ -182,27 +184,48 @@ namespace
   };
 } // namespace
 
+// The trap's external interrupt, with PREEMPTION by higher-priority IRQs --
+// the pico-sdk's isr_riscv_machine_external_irq (crt0_riscv.S), on this
+// port's trap frame. trap.S has already saved every register, mepc and
+// mstatus in the frame and restores them from it, so mstatus.MIE may be set
+// here:
+//   - save meicontext with CLEARTS: mie.MTIE/MSIE are cleared (the tick and
+//     the software interrupt do not preempt an external handler -- they are
+//     lowest, as SysTick and PendSV are on Cortex-M) and their old values
+//     kept in the saved word;
+//   - loop: read meinext WITH update (meicontext.preempt becomes one above
+//     this IRQ's priority, so only higher-priority IRQs can preempt), set
+//     MIE, run the handler, clear MIE;
+//   - restore meicontext: the preemption level, and MTIE/MSIE as they were.
+// A preempting IRQ enters a nested trap (riscv_trap_nesting 2, on the same
+// interrupt stack) and comes back here; the thread switch is made only on
+// the way out of the outermost trap.
 extern "C" void
 riscv_board_external_interrupt (void)
 {
+  std::uint32_t ctx;
+  __asm__ volatile("csrrsi %0, 0xbe5, 2" : "=r"(ctx)::"memory"); // CLEARTS
   for (;;)
     {
       std::uint32_t next;
-      __asm__ volatile("csrr %0, 0xbe4" : "=r"(next)::"memory");
+      __asm__ volatile("csrrsi %0, 0xbe4, 1" : "=r"(next)::"memory"); // UPDATE
       if (next & 0x80000000u)
         {
-          return; // NOIRQ
+          break; // NOIRQ at this preemption level
         }
       const unsigned n = (next >> 2) & 0x1FFu;
       if (n < RP2350_IRQ_COUNT && handlers[n] != riscv_rp2350_unhandled_irq)
         {
+          __asm__ volatile("csrsi mstatus, 8" ::: "memory");
           handlers[n] ();
+          __asm__ volatile("csrci mstatus, 8" ::: "memory");
         }
       else
         {
           csr_clear_meiea (bit_window (n)); // nobody handles it: stop it
         }
     }
+  __asm__ volatile("csrw 0xbe5, %0" ::"r"(ctx) : "memory");
 }
 
 void

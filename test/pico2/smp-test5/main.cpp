@@ -251,19 +251,20 @@ namespace uart
   {
     unreset_block (RESET_UART0 | RESET_IO_BANK0 | RESET_PADS_BANK0);
 
-    // GPIO0 = TX, GPIO1 = RX (function 2). CTRL is at IO_BANK0 + pin*8 + 4.
-    rp2350::reg (rp2350::IO_BANK0_BASE + 0x04)
-        = (rp2350::reg (rp2350::IO_BANK0_BASE + 0x04) & ~0x1FU)
+    // The board's UART0 pins (GPIO0/1 on the Pico 2, GPIO12/13 on the WeAct
+    // RP2350B), function 2. CTRL is at IO_BANK0 + pin*8 + 4.
+    rp2350::reg (rp2350::IO_BANK0_BASE + rp2350::UART_TX_PIN * 8 + 4)
+        = (rp2350::reg (rp2350::IO_BANK0_BASE + rp2350::UART_TX_PIN * 8 + 4) & ~0x1FU)
           | GPIO_FUNC_UART0;
-    rp2350::reg (rp2350::IO_BANK0_BASE + 0x0C)
-        = (rp2350::reg (rp2350::IO_BANK0_BASE + 0x0C) & ~0x1FU)
+    rp2350::reg (rp2350::IO_BANK0_BASE + rp2350::UART_RX_PIN * 8 + 4)
+        = (rp2350::reg (rp2350::IO_BANK0_BASE + rp2350::UART_RX_PIN * 8 + 4) & ~0x1FU)
           | GPIO_FUNC_UART0;
 
     // Un-isolate the pads (PADS reg for pin n is at 0x04 + n*4).
-    rp2350::reg (rp2350::PADS_BANK0_BASE + 0x04)
-        = (rp2350::reg (rp2350::PADS_BANK0_BASE + 0x04) & ~PADS_ISO) | PADS_IE;
-    rp2350::reg (rp2350::PADS_BANK0_BASE + 0x08)
-        = (rp2350::reg (rp2350::PADS_BANK0_BASE + 0x08) & ~PADS_ISO) | PADS_IE;
+    rp2350::reg (rp2350::PADS_BANK0_BASE + 0x04 + rp2350::UART_TX_PIN * 4)
+        = (rp2350::reg (rp2350::PADS_BANK0_BASE + 0x04 + rp2350::UART_TX_PIN * 4) & ~PADS_ISO) | PADS_IE;
+    rp2350::reg (rp2350::PADS_BANK0_BASE + 0x04 + rp2350::UART_RX_PIN * 4)
+        = (rp2350::reg (rp2350::PADS_BANK0_BASE + 0x04 + rp2350::UART_RX_PIN * 4) & ~PADS_ISO) | PADS_IE;
 
     const std::uint32_t u = rp2350::UART0_BASE;
     rp2350::reg (u + CR) = 0;               // disable while configuring

@@ -120,6 +120,22 @@ namespace
     raw_hex (frame->x[CTX_RA]);
     raw (" sp=");
     raw_hex (reinterpret_cast<std::uint64_t> (frame) + ctx_size_bytes);
+    // Which hart, and the stack above the frame: the return addresses the
+    // callers saved there name the code that led here when mepc/ra do not
+    // (a jump to 0 leaves both 0).
+    raw ("\r\n    hart=");
+    raw_hex (RISCV_CSR_READ (mhartid));
+    raw (" mstatus=");
+    raw_hex (RISCV_CSR_READ (mstatus));
+    {
+      const auto* w = reinterpret_cast<const riscv::reg_t*> (
+          reinterpret_cast<std::uintptr_t> (frame) + ctx_size_bytes);
+      for (int i = 0; i < 16; ++i)
+        {
+          raw ((i % 4) == 0 ? "\r\n    stack: " : " ");
+          raw_hex (w[i]);
+        }
+    }
     raw ("\r\nRESULT: FAIL (trap)\r\n");
     // The same facts on the semihosting channel, so the runner's log says
     // which trap it was (the console is the board's UART); then the verdict,

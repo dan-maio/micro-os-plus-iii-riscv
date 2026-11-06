@@ -5,12 +5,11 @@
  * QEMU virt machine and the RP2350's Hazard3 cores number them that way). On
  * a single-hart build the answer is the constant 0 and no CSR is read.
  *
- * "Inside a trap" is the per-hart nesting count kept by trap.S. A trap always
- * runs with mstatus.MIE clear (the hardware clears it on entry and nothing in
- * the port sets it inside a handler), so:
- *   - with MIE set this is thread code: not in a trap, nothing to read;
- *   - with MIE clear the code cannot be moved to another hart while it reads
- *     the count, so the hart id and the count it indexes agree.
+ * "Inside a trap" is the per-hart nesting count kept by trap.S. A handler may
+ * run with mstatus.MIE set (a board with nested external interrupts, the
+ * Pico 2's Xh3irq dispatcher, re-enables it), so on SMP the count is read
+ * with MIE briefly cleared: the code cannot move to another hart between
+ * reading the hart id and reading that hart's count.
  *
  * Copyright (c) 2026 Dan. MIT license.
  */
@@ -44,11 +43,15 @@ namespace riscv
   in_trap (void)
   {
 #if defined(OS_NCPU) && (OS_NCPU > 1)
-    if ((RISCV_CSR_READ (mstatus) & csr::MSTATUS_MIE) != 0)
+    const reg_t s = csr::mstatus_clear_mie ();
+    const bool v = riscv_trap_nesting[this_hart ()] != 0;
+    if (s)
       {
-        return false;
+        csr::mstatus_set_mie ();
       }
+    return v;
+#else
+    return riscv_trap_nesting[0] != 0;
 #endif
-    return riscv_trap_nesting[this_hart ()] != 0;
   }
 } // namespace riscv

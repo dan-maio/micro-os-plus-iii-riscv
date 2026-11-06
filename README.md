@@ -8,7 +8,9 @@ architecture project beside `micro-os-plus-iii-cortexm`, `-aarch32` and
 First board: **Milk-V Duo (64 MB)** -- Sophgo CV1800B, T-Head C906 @ 850 MHz,
 64 MiB DDR2 (RV64GC). Second board: **Raspberry Pi Pico 2** (RP2350) on its
 two Hazard3 cores (RV32IMAC, no FPU), µOS++ SMP on both -- see *RV32 and the
-Pico 2*, *SMP* and *Pico 2 hardware* below.
+Pico 2*, *SMP* and *Pico 2 hardware* below. Third board: **WeAct RP2350B**
+(16 MB flash, 8 MB QSPI PSRAM) -- the Pico 2's sources with the data in the
+PSRAM, the clock table and the 250 MHz overclock; see *WeAct RP2350B*.
 
 ## Layout
 
@@ -40,7 +42,12 @@ micro-os-plu-iii-smp-riscv-pr-github/       the workspace
         │                                   qemu.sh, hw.sh, hw-all.sh,
         │                                   hw-reset.sh + reset.cfg,
         │                                   wait-power-cycle.sh, include/, src/
-        └── milkv-duo/                      one directory per test application
+        ├── boards/pico2/                   the RP2350 sources (both RP2350 boards)
+        ├── boards/pico2-rp2350b-psram/     board.cmake (includes pico2's),
+        │                                   linker.ld (16 MB), linker-psram.ld,
+        │                                   hw.sh, qemu.sh
+        ├── milkv-duo/, pico2/,             one directory per test application
+        └── pico2-rp2350b-psram/
 ```
 
 ## The port
@@ -159,7 +166,7 @@ RP2350 Cortex-M port, on RISC-V mechanisms:
 | | RP2350 Cortex-M port | RISC-V port |
 |---|---|---|
 | CPU id (`port_cpu_id()`) | `SIO_CPUID` | `mhartid` (`riscv::this_hart()`) |
-| kernel lock | recursive spinlock on SIO hardware spinlock 0 | recursive spinlock on an AMO (`amoswap.w.aq` / store-release), owner + depth |
+| kernel lock | recursive spinlock on SIO hardware spinlock 0 | recursive spinlock on an AMO (`amoswap.w.aq` / store-release), owner + depth; the lock word lives where AMOs work (`include/riscv-amo.hpp`, see *WeAct RP2350B*) |
 | critical section | PRIMASK + kernel lock | `mstatus.MIE` + kernel lock |
 | scheduler lock | per core, holds the kernel lock with IRQs masked | the same, per hart |
 | switch | PendSV per core | `ecall` per hart (as single-hart) |
@@ -191,17 +198,46 @@ built for (`riscv_secondary_boot`'s size), one for a single-hart image.
 | | |
 |---|---|
 | image | runs from flash (XIP, `linker.ld`); `src/image-def.S` puts the RISC-V IMAGE_DEF block (EXE / RISC-V / RP2350, entry `_start`, sp) first, inside the 4 KiB the boot ROM scans; on an Arm boot the ROM switches both cores to Hazard3. `startup.S` now copies `.data` from `__data_load` (`LOADADDR(.data)`; equal to `__data_start` on RAM images) |
-| clocks | `src/clocks.cpp` (the Cortex-M pico2 sequence): XOSC 12 MHz -> PLL_SYS -> clk_sys = clk_peri = 150 MHz, flash SCK divider 3 set first; TICKS: watchdog, TIMER0 and the RISC-V timer at 1 us |
+| clocks | `src/clocks.cpp` (the Cortex-M pico2 sequence and API): XOSC 12 MHz -> PLL_SYS -> clk_sys = clk_peri, 150 MHz by default; `PICO2_SYS_CLK_KHZ` = 48000 / 100000 / 120000 / 150000 / 200000 / 250000 (200 and 250 MHz raise the core voltage first, POWMAN VREG 1.20 / 1.25 V); `PICO2_CLOCK_FROM_SCRATCH`: a row of `clocks::SYS_TABLE` (48..200 MHz, + 250 MHz with `PICO2_ENABLE_250MHZ`) from the watchdog scratch, 48 MHz on a cold boot, `clocks::reboot_to_index()` reboots into another row. The QSPI dividers are set before the clock changes and **only raised** (flash SCK <= 50 MHz, PSRAM SCK <= 109 MHz): measured, lowering the flash divider to 1 on the boot clock made the next fetch garbage (mcause 2 inside `clocks::init()`). TICKS from clk_ref: watchdog, TIMER0 and the RISC-V timer at 1 us, whatever clk_sys is. `clocks::adc_clk_init()` (clk_adc from PLL_USB), `src/adc.cpp` |
 | time | SIO `MTIME` (`MTIME_CTRL` EN, FULLSPEED off): **1 MHz** (`TIMEBASE_HZ`); `TIME_CSR = false` (Hazard3 has no `time` CSR) |
 | comparator / IPI | SIO `MTIMECMP` per core at one address (stride 0); `RISCV_SOFTIRQ` set/clear bits (`RISCV_BOARD_SOFTIRQ_SIO` in `clint.hpp`) |
-| console | UART0 PL011, GPIO0 TX / GPIO1 RX (the Debug Probe's UART), 115200; shared by both harts under SIO spinlock 1 with MIE masked; copied to semihosting from threads |
-| LED | GPIO25 |
+| console | UART0 PL011, GPIO0 TX / GPIO1 RX (the Debug Probe's UART; `PICO2_UART_TX_PIN` / `_RX_PIN`), 115200, the divider from the running clock (`clocks::current_khz()`); shared by both harts under SIO spinlock 1 with MIE masked; `uart::get_char()` non-blocking |
+| LED | GPIO25 (`PICO2_LED_PIN`) |
+| libraries | the toolchain has no multilib for the Hazard3 `-march`, and alone picks `rv32ia` -- **no M**: libgcc's software float multiplied through a shift-and-add `__mulsi3`, four calls per float multiply. `board.cmake` links `-march=rv32imc_zicsr_zifencei` (`UOS_BOARD_LINK_FLAGS`, link only; same ilp32 ABI). Measured on the RP2350B, smp-mat-test N=300: parallel 49.99 s -> **14.44 s**, classical 57.96 s -> **23.95 s**, 2-core ratio 1.16x -> **1.66x**. Hazard3 has no FPU: float stays in software |
 | core 1 | `src/multicore.cpp`: the boot ROM FIFO handshake `{0, 0, 1, mtvec, sp, entry}` (pico-sdk `multicore_launch_core1_raw`, `h3.unblock` for SEV) into `src/secondary.S` (loads gp and mtvec -- the ROM does not set gp), then the caller's entry. **No PSM reset of core 1**: measured, forcing it off/on under the debugger gives `[rp2350.rv1] Hart unexpectedly reset!` and no handshake; after a chip reset it already waits in the ROM (as the pico-sdk assumes) |
 | interrupts | Hazard3 Xh3irq as the NVIC (`src/irq.cpp`, `include/rp2350-irq.h`, generated from the pico-sdk's `intctrl.h`): `NVIC_Enable/DisableIRQ` = `meiea` (per core) + `mie.MEIE`, `NVIC_Set/ClearPendingIRQ` = `meifa` (forced pending; a `meinext` read that returns the IRQ clears it), `NVIC_SetPriority(n, p)` = `meipra` 15 - p; the trap's external interrupt loops on `meinext` and calls `<NAME>_Handler` (the Cortex-M vector names, weak; an unhandled IRQ is disabled). The port's soft-IRQ `NVIC_*` are weak and stay the Duo's |
+| nested interrupts | the pico-sdk's dispatcher: save `meicontext` with CLEARTS, then per `meinext` (with UPDATE, which raises the preemption threshold to that IRQ's priority) set `mstatus.MIE`, call the handler, clear MIE; restore `meicontext`. A higher-priority IRQ preempts a running handler. The port reads "inside a trap" with MIE briefly cleared on SMP (`riscv::in_trap()`), and `reschedule()` restores MIE in a handler. `smp-test-nested` proves it: TIMER0 alarm 2 (priority 8) preempts the UART0 handler (12), counted per core |
 | console to semihosting | **verdict lines only** (a write containing `RESULT:`); the rest is UART only. Measured: with every line copied, OpenOCD + the Debug Probe (fw 2.0.1) stopped servicing semihosting in long runs (validator: core 0 halted on a valid `SYS_WRITE0` after 43; smp-mat-test lost the debug module after ~114). The trap report also goes to semihosting (mcause, mepc, mtval, ra) |
 | `mtval` | Hazard3 hardwires it to 0 (datasheet): code that needs a fault address decodes the instruction (the validator's DWT emulation does) |
 | harness | kernel platform `riscv-pico2` (`xpm run ... --config riscv-pico2-cmake-gcc-{debug,release}`); `test/pico2/include/cmsis-plus/os-app-config.h` caps rtos-apis's RTOS arena at 96 KiB on hardware and leaves FatFs out (the free store is 468992 bytes; 512 KiB threw bad_alloc), as the Cortex-M Pico 2 board does |
 | `hw.sh` | Raspberry Pi OpenOCD (`~/.pico-sdk/openocd/*`, also looked up on the mounted home), probe pinned by VID:PID **2e8a:000c** (with the Duo's Sipeed probe also plugged in, OpenOCD took that one first); `init; reset init; program <elf> verify; reset init; arm semihosting enable` (both harts)`; resume`; verdict = RESULT line + OpenOCD's exit status (SYS_EXIT) |
+
+## WeAct RP2350B (test/boards/pico2-rp2350b-psram)
+
+The RP2350B (48 GPIOs) with 16 MB flash and an 8 MB APS6404 QSPI PSRAM. Its
+`board.cmake` includes the Pico 2's (so `src/` and `include/` are shared) and
+sets its own linker scripts, pins and greeting.
+
+| | |
+|---|---|
+| probe | its own CMSIS-DAP, **c251:f001**, 1000 kHz -- nothing is shared with the Pico 2's Debug Probe (2e8a:000c) or the Duo's Sipeed (d6e7:3507); `hw.sh` pins it by VID:PID and disables the GDB/telnet/TCL ports, so it runs beside the Pico 2's session |
+| flash | `set FLASHSIZE 0x1000000` (the default 4 MB silently truncates); `linker.ld` is the Pico 2's with 16 MB |
+| console, LED | UART0 on **GPIO12 TX / GPIO13 RX**, LED GPIO25 (`PICO2_UART_TX_PIN=12`, ...) |
+| Arm view | if `rp2350-riscv.cfg` cannot examine the harts, `hw.sh` first programs the image through `target/rp2350.cfg`; the boot ROM then switches both cores to Hazard3. Measured: this also brings the board back after a clock test left the harts unreachable (`Examination failed`), with no power cycle |
+| PSRAM | `src/psram.cpp` (`PICO2_PSRAM`, CS = GPIO0 = `PICO2_PSRAM_CS_PIN`): the Cortex-M driver -- QMI direct mode, RSTEN/RST, quad enable, M1 read 0xEB / write 0x38 formats and timing, window 1 writable. `init()`/`read_id()` are in `.psram_ram`, run from SRAM (in direct mode the QMI cannot serve flash XIP), with MIE off |
+| start-up hook | `startup.S` calls `riscv_board_initialize_memory()` (weak, empty by default) on the boot stack **before** the `.data` copy and the `.bss` zeroing; with `PICO2_PSRAM` it copies `.psram_ram` to SRAM and runs `psram::init()`; a failed read-back ends the run with `RESULT: FAIL (PSRAM init ...)` over semihosting |
+| `linker-psram.ld` | `.data`, `.bss` and the heap (thread stacks too) at 0x11000000 (8 MB); SRAM keeps `.psram_ram`, the AMO targets, the boot and IRQ stacks and `.noinit` |
+| **AMOs** | measured: an `amoswap.w` to the PSRAM window faults (**mcause 7**, store/AMO access fault) -- the first kernel lock after start-up. The objects the port changes with AMOs (`smp_klock`, the soft-IRQ words) are placed in `.data.amo` / `.bss.amo` (`include/riscv-amo.hpp`): ordinary linker scripts fold them into `.data`/`.bss`, `linker-psram.ld` keeps them in SRAM inside `.psram_ram` (copied from flash, zeros included). The PSRAM images contain no other AMO/LR/SC (checked with objdump) |
+| clocks | as the Pico 2's (`PICO2_SYS_CLK_KHZ`, the table, 250 MHz); at 250 MHz the PSRAM divider becomes 3 (83 MHz) |
+| trap report | adds the hart, `mstatus` and 16 words of the interrupted stack (a jump to 0 leaves mepc and ra 0) |
+
+The nested-clock tests are interactive, as on the Cortex-M board: a cold boot
+runs at 48 MHz and shows the potentiometer (GPIO40 = ADC0) and the clock it
+selects; `y` on the UART reboots through the watchdog into that clock
+(`reboot_to_index()`: this hart's MIE off, the other core held off through
+PSM `FRCE_OFF`, the watchdog's debug-pause bits cleared) and the test starts
+there. After the reboot OpenOCD has lost both harts (`Hart unexpectedly
+reset!`), so the verdict is the `RESULT` line on the UART, not `hw.sh`'s exit.
 
 ## Milk-V Duo facts (from the duo-buildroot-sdk)
 
@@ -325,7 +361,7 @@ Not carried: the SMP tests (`smp_test1..4`, `smp-*`) -- µOS++ drives one hart
 on the Duo and they cannot be built at `OS_NCPU=1` (the second C906 is a
 separate, non-coherent core); `sd_test`, `usb_*` -- no SD/USB drivers yet.
 
-### Status (2026-11-05)
+### Status (2026-11-06)
 
 RV32 (phase 1 of the Pico 2 port): the Duo's tests built for the RV32 stand-in
 (`test/build-rv32`): **7 passed, mmu-test skipped** (no MMU on RV32). RV64
@@ -368,7 +404,42 @@ Pico 2 (Raspberry Pi Debug Probe), one run after the semihosting change:
 | smp-test-usb-cdc-acm | 2 | **PASS** -- enumerates as `cafe:4013`, echoes the host's line, Escape ends it | hw only |
 | smp-test-usb-hid | 2 | **PASS** -- enumerates as `cafe:4012`, HID OUTPUT reports, Escape ends it | hw only |
 
-**All 20 Cortex-M Pico 2 tests pass on the RISC-V Pico 2.**
+**All 20 Cortex-M Pico 2 tests pass on the RISC-V Pico 2.** Since then:
+`smp-test-nested` (nested Xh3irq interrupts, ported from the RP2350B's
+Cortex-M test) **PASS** on the Pico 2 -- `wrk0=20 wrk1=20 uart=11 t2=32
+t3=16 t2_in_uart=11` (alarm 2 preempted all 11 UART handler runs) -- and
+smp-mat-test **PASS** with the `rv32imc` libraries (6 s for the whole run,
+26 s before).
+
+WeAct RP2350B (2026-11-06, probe c251:f001):
+
+| test | cores | RP2350B | notes |
+|---|---|---|---|
+| sc-test-ko | 1 | **PASS** | |
+| exc-test | 1 | **PASS** | |
+| smp-test0 (bare) | 2 | **PASS** | |
+| smp-test1 | 1 | **PASS** | |
+| smp-test2 | 2 | **PASS** | |
+| smp-test3 | 2 | **PASS** | |
+| smp-test4 | 2 | **PASS** | |
+| smp-test5 | 2 | **PASS** | UART0 on GPIO12/13 |
+| smp-test-ko | 2 | **PASS** | |
+| smp-test-nested | 2 | **PASS** | `t2_in_uart=11` |
+| smp-mat-test | 2 | **PASS** | N=300, B=50, matrices in PSRAM, 150 MHz: parallel 14.44 s, classical 23.95 s, 1.66x |
+| smp-mat-test_200 | 2 | **PASS** | the same at a fixed 200 MHz (PSRAM 100 MHz); not a Cortex-M test |
+| smp-mat-test_250 | 2 | **PASS** | the same at a fixed 250 MHz, 1.25 V (PSRAM 83 MHz); not a Cortex-M test |
+| smp-test-nested-clock_200 | 2 | **PASS** (UART) | N=500; pot -> 200 MHz, `y`, watchdog reboot, solver + nested IRQs |
+| smp-test-nested-clock_250 | 2 | **PASS** (UART) | N=800; pot -> **250 MHz** overclock, `y`, reboot, solver + nested IRQs |
+| smp-test-nested-clock | 2 | not run yet | N=1000 (4 MB in place) |
+| fp-switch (harness) | 1 | not run yet | built (the kernel suite through the port tree); the kernel-harness platform is not added yet |
+
+The first eleven passed twice: once with the `rv32ia` libraries and again with
+`rv32imc`, both before the clock driver was extended. **Not rerun since that
+change** (the clock table, the raise-only QSPI dividers, the UART divider from
+the running clock): those eleven and the Pico 2's tests. One
+`smp-test-nested-clock_200` run trapped on the second boot after the reboot
+(mcause 2, mepc 0, ra 0, on the boot stack); the next run passed. Not
+root-caused; the extended trap report is for the next occurrence.
 
 **USB** (`test/boards/pico2/usb/`): TinyUSB, its RP2040/RP2350 device driver
 and the pico-sdk shim, as the Cortex-M board carries them, with the Arm parts
