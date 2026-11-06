@@ -7,11 +7,12 @@
 #
 # Defaults:
 #   serial   /dev/ttyUSB0
-#   seconds  15
+#   seconds  60 with RESET=wdt, else 15
 #
 # Environment:
-#   RESET    srst | power | halt | run      (default: srst)
-#   CFG      OpenOCD config
+#   RESET    wdt | srst | power | halt | run   (default: wdt)
+#   CFG      OpenOCD config (default: by RESET, from PROJ)
+#   PROJ     directory holding the jh7110_*.cfg files (default: this one)
 #   OPENOCD  path to openocd
 #   BAUD     115200
 #   KEY      "\r" (CR; any key stops U-Boot autoboot)
@@ -21,6 +22,10 @@
 #   The RISC-V Debug Module's `reset halt` / `reset run` do NOT reboot the
 #   SoC. They halt/resume the U74 harts and leave the loaded image in place.
 #   A real board reset needs one of:
+#
+#     RESET=wdt    (default) the JH7110 watchdog, armed over JTAG with
+#                  jh7110_wdt_reset.cfg, disarmed after the reboot with
+#                  jh7110_wdt_disable.cfg. No wire needed.
 #
 #     RESET=srst   the probe's RST/SRST wired to 40-pin header pin 36
 #                  (GND to pin 39). Uses jh7110_daplink_srst.cfg.
@@ -47,7 +52,7 @@ BAUD="${BAUD:-115200}"
 KEY="${KEY:-\r}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJ="${PROJ:-$HERE/mmu-test-vf2}"
+PROJ="${PROJ:-$HERE}"   # the cfgs sit beside this script (repo root)
 CFG_MAIN="${CFG_MAIN:-$PROJ/jh7110_daplink.cfg}"
 CFG_SRST="${CFG_SRST:-$PROJ/jh7110_daplink_srst.cfg}"
 CFG_WDT="${CFG_WDT:-$PROJ/jh7110_wdt_reset.cfg}"

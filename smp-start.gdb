@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# debug/smp-start.gdb -- start the four-hart image under GDB.
+# smp-start.gdb -- start the four-hart image under GDB.
 #
 # Executed by the Eclipse launch ("Run/Restart Commands") AFTER Eclipse has
 # loaded Debug/smp-mat-test-vf2.elf into DDR at 0x40200000. The GDB is

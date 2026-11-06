@@ -13,10 +13,10 @@ before the number decreases to 0.”* The same is true after a board reset.
 | file | purpose |
 |---|---|
 | `vf2-reset-to-uboot.sh` | sends the key stream and performs the reset |
-| `*/jh7110_wdt_reset.cfg` | **software reset** through the JH7110 watchdog |
-| `*/jh7110_wdt_disable.cfg` | stop a watchdog left running after the reset |
-| `*/jh7110_daplink_srst.cfg` | OpenOCD config with SRST enabled (pin 36) |
-| `*/jh7110_daplink.cfg` | the normal JTAG config (diagnostics) |
+| `jh7110_wdt_reset.cfg` | **software reset** through the JH7110 watchdog |
+| `jh7110_wdt_disable.cfg` | stop a watchdog left running after the reset |
+| `jh7110_daplink_srst.cfg` | OpenOCD config with SRST enabled (pin 36) |
+| `jh7110_daplink.cfg` | the normal JTAG config (the same as `test/boards/visionfive2-lite/jh7110_daplink.cfg`) |
 
 ## Method 1 — watchdog reset from JTAG (no reset pin needed)
 
@@ -34,7 +34,7 @@ key from the mainline `starfive-wdt.c` driver:
 Run:
 
 ```bash
-cd /home/dan/Workspaces/milk-v
+cd micro-os-plus-iii-riscv          # the repo root: the script and its cfgs
 ./vf2-reset-to-uboot.sh /dev/ttyUSB0
 ```
 
@@ -63,15 +63,16 @@ Notes:
   always-on domain). Run:
 
   ```bash
-  openocd -f /home/dan/Workspaces/milk-v/mmu-test-vf2/jh7110_wdt_disable.cfg
+  openocd -f jh7110_wdt_disable.cfg      # from the repo root
   ```
 
   or power-cycle the board.
 
-Explicit form if you use another project:
+The cfgs are taken from the script's own directory. To use a copy kept
+elsewhere (an Eclipse project, for instance), point `PROJ` at it:
 
 ```bash
-PROJ=/home/dan/Workspaces/milk-v/smp-mat-test-vf2 \
+PROJ=/path/to/a/project/with/the/cfgs \
   RESET=wdt ./vf2-reset-to-uboot.sh /dev/ttyUSB0 60
 ```
 
@@ -81,7 +82,7 @@ Wire the probe’s **RST/SRST** to the 40-pin header **pin 36** (GND pin 39),
 then:
 
 ```bash
-cd /home/dan/Workspaces/milk-v
+cd micro-os-plus-iii-riscv          # the repo root: the script and its cfgs
 RESET=srst ./vf2-reset-to-uboot.sh /dev/ttyUSB0 15
 ```
 
@@ -97,7 +98,7 @@ already running. This is the cleanest method if you can add the wire.
 ## Method 3 — no reset wire: power-cycle while keys are sent
 
 ```bash
-cd /home/dan/Workspaces/milk-v
+cd micro-os-plus-iii-riscv          # the repo root: the script and its cfgs
 RESET=power ./vf2-reset-to-uboot.sh /dev/ttyUSB0 15
 ```
 

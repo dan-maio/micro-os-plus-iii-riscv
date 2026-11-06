@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# debug/semihost-start.gdb -- start the four-hart image with semihosting ON.
+# semihost-start.gdb -- start the four-hart image with semihosting ON.
 #
 # Use with jh7110_daplink_semihost.cfg. That config has four INDEPENDENT
 # targets and no SMP group, so:
