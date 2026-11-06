@@ -62,6 +62,7 @@ is built on what the RISC-V privileged spec guarantees:
 | switch asked for inside a critical section | PendSV waits for PRIMASK | deferred; `critical_section::exit()` yields when it sets `mstatus.MIE` again |
 | scheduler locked | nothing until unlock | same; unlocking yields if a switch is pending |
 | SysTick | SysTick | machine timer (CLINT `mtimecmp` against `rdtime`) |
+| missed ticks | dropped (one pending SysTick) | **caught up**: each tick trap counts the whole periods `rdtime` has passed; N owed ticks = N-1 bare `sysclock`/`hrclock` increments + one `os_systick_handler()`, so timeouts and timers are checked once against the advanced clock (no burst of a periodic timer). The comparator is never set closer than one period from now (`riscv_port_tick_guard`). The kernel's simulated RTC still loses halted time |
 | PRIMASK | PRIMASK | `mstatus.MIE` (`csrrci`/`csrrsi`, atomic) |
 | exception frame + r4-r11 | | full frame by `trap.S`: x1..x31, mepc, mstatus, fcsr, f0..f31 (528 bytes) |
 | IPSR != 0 | | `riscv_trap_nesting != 0` |
@@ -231,7 +232,7 @@ sets its own linker scripts, pins and greeting.
 | clocks | as the Pico 2's (`PICO2_SYS_CLK_KHZ`, the table, 250 MHz); at 250 MHz the PSRAM divider becomes 3 (83 MHz) |
 | trap report | adds the hart, `mstatus` and 16 words of the interrupted stack (a jump to 0 leaves mepc and ra 0) |
 | flash writer | `src/flash_rp2350.cpp` (`include/flash_rp2350.h`): the predecessor's `mu_flash_erase / _program / _xip_flush / _core1_lockout` API (micro-os-plus-iii-pico2, `src/xip-flash`) on the pico-sdk's RP2350 sequence -- ROM functions through the RISC-V lookup entry (16-bit address at `0x7dfa`, `RT_FLAG_FUNC_RISCV`); MIE off; XIP cache cleaned (pending PSRAM writes); QSPI pads, QMI M0 timing and the CS1 (PSRAM) registers saved; `connect_internal_flash`, `flash_exit_xip`, erase/program, `flash_flush_cache`; XIP re-entered through the boot ROM's setup stub copied from boot RAM (as the SDK's `flash_enable_xip_via_boot2`), or `flash_enter_cmd_xip` when the stub is empty; everything restored. It lives in `.data.ramfunc` (SRAM on every linker script) and calls out only through registers (checked in the disassembly) |
-| why MIE is off | between `flash_exit_xip` and the re-entry nothing can be fetched from flash, and the trap vector, the dispatcher and every handler are in flash: an interrupt there (the 1 ms tick, during a tens-of-ms erase) would fetch from a flash that is not mapped. The other hart is parked in SRAM (`mu_flash_core1_lockout`) with its MIE off for the same reason. `mtime` keeps counting, so the kernel clock catches up |
+| why MIE is off | between `flash_exit_xip` and the re-entry nothing can be fetched from flash, and the trap vector, the dispatcher and every handler are in flash: an interrupt there (the 1 ms tick, during a tens-of-ms erase) would fetch from a flash that is not mapped. The other hart is parked in SRAM (`mu_flash_core1_lockout`) with its MIE off for the same reason. `mtime` keeps counting and the tick catches the missed periods up (*The port*, missed ticks) |
 | `linker-psram-exec.ld` | psram-exec: the supervisor in flash with its data in SRAM, `.psram_ram` in SRAM, and two applications linked at 0x11000000 (A) and 0x11400000 (B), loaded from flash |
 | `linker-flatfs.ld` | the image in the first 1 MiB, `FLASH_FS` (3 MiB) at 0x10100000, `_fs_base / _fs_size / _flash_fs_begin / _flash_fs_end` -- the predecessor's `pico2-rp2350-flatfs.ld` layout; data in SRAM (a flash write takes the PSRAM away too, so the caller's stack must not be there) |
 
@@ -249,7 +250,9 @@ reset!`), so the verdict is the `RESULT` line on the UART, not `hw.sh`'s exit.
 |---|---|
 | timebase | 25 MHz (`cv180x_base_riscv.dtsi`) |
 | CLINT | `0x74000000`, **32-bit MMIO only** (`clint,has-no-64bit-mmio`); `mtimecmp` written as split 32-bit halves. **`mtime` (+0xBFF8) is not readable from M-mode** -- measured: load access fault (mcause 5), also with 32-bit loads; the port uses `rdtime` only (`MTIME_READABLE = false`) |
-| PLIC | `0x70000000` |
+| PLIC | `0x70000000`; hart 0 M-mode = context 0 (enable +0x2000, threshold +0x200000, claim +0x200004); priorities 1..7. The C906's interrupt IDs: SG2002 TRM table 3.2 (UART4 = **48**, as in the CV1800B dtsi; DW Timer0..7 = **79..86**). `src/irq.cpp` (`duo_irq::`): a nested dispatcher -- claim, threshold = the source's priority, `mie.MTIE`/`MSIE` cleared (Hazard3's CLEARTS by hand: the tick stays below every external IRQ), `mstatus.MIE` set around the handler, complete, threshold back. Not the `NVIC_*` names: on this board those are the port's soft-IRQ lines (the CMSIS validator uses them) |
+| DW timers | `0x030A0000`, 8 x 32-bit down counters, `0x14` apart (load, current, control [enable, user mode, int mask], EOI-on-read, status); count clock **measured 25 MHz** against `rdtime` (TRM 12.4.3 reset default); gates and resets on after BL2 (`CLK_EN_0..4 = 0xffffffff`) |
+| reset button | header pin **30 RUN** to pin **36 3V3(OUT)**: RUN is inverted on the Duo -- a high level holds the chip in reset (datasheet 2.7); not pin 37 (3V3_EN switches the 3.3 V off) |
 | `mxstatus` | `0xc0638000` written by BL2: MAEE on (PTE bits 63..59 are T-Head attributes) |
 | console | UART4 `0x041C0000`, header pins 4 (TX) / 5 (RX), 115200 8N1 (set by BL2) |
 | LED | GPIOC (`0x03022000`) bit 24 (Linux GPIO 440) |
@@ -359,11 +362,16 @@ come back. A hung board is therefore power-cycled by hand (or pin 30 RUN).
 | exc-test | RP2350 (RISC-V form) | illegal insn, ecall, access fault mid-thread; regs survive |
 | mmu-test | RISC-V | Sv39 through MPRV, alias both directions, misaligned |
 | semihosting-test | RISC-V | WRITEC/WRITE0, value-returning calls, with the tick running |
+| smp-test1 | pico2 (Cortex-M) | single-core RTOS bring-up: two workers, mutex, LED (the same source as the Pico 2's) |
+| smp-mat-test | pico2 (Cortex-M) | the block solver at one hart, N = 300, B = 50 (the RP2350B's size), the barrier's SIO spinlock as an AMO, TIMER0 as `rdtime`: block 87.7 ms, classical 113.6 ms on the C906's FPU (RP2350B Hazard3, software float, two cores: 14.4 s / 24.0 s) |
+| smp-test-nested | RP2350B (Cortex-M), hw only | nested PLIC interrupts: DW Timer0 (priority 3, one-shot 500 us into the UART handler) must preempt UART4's handler (priority 1, its TX-empty interrupt started by a thread, busy 2 ms); DW Timer1 periodic (2). PASS needs `t2_in_uart > 0`; prints the DW timer, `rdtime` and `sysclock` elapsed times |
+| clock-catchup | RISC-V | `sysclock` follows `rdtime` within 2 % across ten 100 ms masked periods |
 | blinky, fp-switch, instrumentation, mutex-stress, rtos-apis, cmsis-os-validator | harness suites | built under the kernel's harness only |
 
-Not carried: the SMP tests (`smp_test1..4`, `smp-*`) -- µOS++ drives one hart
-on the Duo and they cannot be built at `OS_NCPU=1` (the second C906 is a
-separate, non-coherent core); `sd_test`, `usb_*` -- no SD/USB drivers yet.
+Not carried: the two-core SMP tests (`smp-test2..5`, `smp-test-ko`, the
+nested-clock tests) -- µOS++ drives one hart on the Duo (the second C906 is a
+separate, non-coherent core); `sd_test`; the USB tests are next (TinyUSB's
+DWC2 driver, the controller set up as BL2 does it).
 
 ### Status (2026-11-06)
 
@@ -553,6 +561,27 @@ tests with the most semihosting traffic; it recovered and both passed.
 
 Before the switch rewrite every blocking test stopped at its first blocking
 call (the MSIP window described under *The port*).
+
+Hardware, Milk-V Duo, 2026-11-06, after the RV32/SMP, nested-interrupt, AMO,
+start-up-hook changes and the tick catch-up, every test ending in its
+semihosting exit 0 (`RESET=0`, back to back): **port tree 12/12** (368 s; the
+8 above + clock-catchup, smp-test1, smp-mat-test, smp-test-nested) and
+**harness 18/18** (757 s; the 14 + the four, rtos-apis included). Earlier the
+same day, before the new tests: port 8/8, harness 14/14.
+
+Found on the way: the tick dropped missed periods -- smp-test-nested measured
+`sysclock` 19 s against 45 s of `rdtime` and DW timer (semihosting halts the
+hart for every console line); fixed by the catch-up above, then
+`elapsed: DW timer 34066 ms, rdtime 34066 ms, sysclock 34067 ms`. And twice
+the same C++ trap: `(void) reg (addr);` on a `volatile` reference performs
+**no load** (GCC: "conversion to void will not access object") -- the DW
+timer's EOI was never read, its interrupt stayed asserted and the hart lived
+in the dispatcher (the PSRAM driver's RX-FIFO pop had the same fault); the
+reads go through a helper now, and no build gives the warning.
+
+The Duo's JTAG watchdog reset is not always enough: after a hang, or a
+failed reset, the JTAG chain reads all ones until a hand power cycle (pin 30
+RUN to 3V3 would do it, see the facts table).
 
 ### What the RISC-V port found in the shared code
 

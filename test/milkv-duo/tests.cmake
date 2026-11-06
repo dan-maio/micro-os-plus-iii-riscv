@@ -12,6 +12,10 @@
 # Cortex-M port's pico2 runs its tests on QEMU.
 # -----------------------------------------------------------------------------
 
+# Hardware only: smp-test-nested drives the CV1800B's PLIC, timers and UART4,
+# which QEMU's virt machine does not have.
+set (BOARD_TEST_HWD_ONLY smp-test-nested)
+
 function (board_test_qemu_libs _app _out)
   if (UOS_QEMU_STANDIN)
     set (${_out} ${UOS_QEMU_STANDIN} PARENT_SCOPE)

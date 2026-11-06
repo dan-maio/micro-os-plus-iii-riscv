@@ -174,12 +174,18 @@ namespace
   std::uint64_t next_tick[OS_NCPU];
 
   void
-  tick_write (unsigned hart)
+  tick_write_at (std::uint64_t deadline, unsigned hart)
   {
-    clint::mtimecmp_write (next_tick[hart]
+    clint::mtimecmp_write (deadline
                                + static_cast<std::uint64_t> (
                                    riscv_port_clint_offset),
                            hart);
+  }
+
+  void
+  tick_write (unsigned hart)
+  {
+    tick_write_at (next_tick[hart], hart);
   }
 
   void
@@ -192,39 +198,28 @@ namespace
   }
 } // namespace
 
-// Re-arm this hart's comparator one period after its previous deadline, so
-// the tick does not drift with interrupt latency. If the hart fell more than
-// a period behind (a debugger halt, a long critical section), restart the
-// grid from now rather than firing a burst of catch-up ticks. Hart 0's tick
-// is the system clock: only it moves riscv_port_last_tick (the high-
-// resolution clock's base).
+// Start this hart's grid one period from its current next_tick (set to now
+// by tick_start_this_hart()).
 void
 riscv_port_tick_rearm (void)
 {
   const unsigned h = riscv::this_hart ();
-  const std::uint64_t now = clint::now ();
-  std::uint64_t last = next_tick[h];
-  next_tick[h] += tick_period;
-  if (next_tick[h] <= now)
-    {
-      last = now;
-      next_tick[h] = now + tick_period;
-    }
   if (h == 0)
     {
-      riscv_port_last_tick = last;
+      riscv_port_last_tick = next_tick[h];
     }
+  next_tick[h] += tick_period;
   tick_write (h);
 }
 
-// Called AFTER the tick handler. If the handler itself ran past the next
-// deadline (a timer callback that is slow, e.g. a semihosting write, which
-// halts the hart for a JTAG round trip), the next tick would be taken right
-// after mret and no thread would ever run again -- measured on the Duo with
-// rtos-apis' 1-tick periodic timer: the hart lived in the tick trap. So the
-// next deadline is moved to one full period from now: threads always get
-// at least one period between ticks. The ticks lost are lost, as after any
-// halt.
+// Called AFTER the tick handler. The grid (next_tick) is never moved here:
+// time owed stays owed and the next tick traps catch it up. But the
+// comparator is never set earlier than one full period from now, so threads
+// always run between two tick traps -- a handler slower than a period (a
+// timer callback doing a semihosting write, which halts the hart for a JTAG
+// round trip) would otherwise take the next tick right after mret and keep
+// the hart in the tick trap (measured on the Duo with rtos-apis' 1-tick
+// periodic timer).
 void
 riscv_port_tick_guard (void)
 {
@@ -232,23 +227,61 @@ riscv_port_tick_guard (void)
   const std::uint64_t now = clint::now ();
   if (next_tick[h] <= now)
     {
-      next_tick[h] = now + tick_period;
-      tick_write (h);
+      tick_write_at (now + tick_period, h);
     }
 }
-
-extern "C" void os_systick_handler (void);
 
 // The machine-timer trap. Hart 0 advances the RTOS clock (which ends by
 // rescheduling); another hart's tick only reschedules that hart, so it picks
 // up threads hart 0 has woken -- as core 1's SysTick does in the RP2350
 // Cortex-M port.
+//
+// The RTOS clock follows real time: every whole period that rdtime/mtime
+// has passed since the last processed tick is an RTOS tick, also the ones
+// the hart missed (a debugger halt -- semihosting halts the hart for every
+// call --, a long critical section, a handler running with the tick masked).
+// N owed ticks are N - 1 bare increments of sysclock and hrclock, then one
+// ordinary os_systick_handler(): the timeouts and timers are checked ONCE,
+// against the advanced clock -- every expired timeout fires, a periodic
+// timer fires once (not N times in a burst, which a slow callback could
+// turn into a livelock). Not caught up: the kernel's simulated RTC (a
+// per-tick countdown static inside os_systick_handler()), which still loses
+// halted time.
+//
+// Measured on the Duo before: smp-test-nested's sysclock ran 19 s while
+// rdtime and a DW timer ran 45 s; clock-catchup (QEMU) saw 624 ms of
+// sysclock for 1070 ms of rdtime with a per-trap cap of 8.
 void
 riscv_port_tick (void)
 {
-  riscv_port_tick_rearm ();
-  if (riscv::this_hart () == 0)
+  const unsigned h = riscv::this_hart ();
+  const std::uint64_t now = clint::now ();
+  std::uint64_t due = 0;
+  if (next_tick[h] <= now)
     {
+      due = (now - next_tick[h]) / tick_period + 1;
+      next_tick[h] += due * tick_period;
+    }
+  tick_write (h);
+  if (due == 0)
+    {
+      // Early (the guard set the comparator past the grid, or a spurious
+      // trap): nothing owed yet.
+      return;
+    }
+  if (h == 0)
+    {
+      // The high-resolution clock's base: the last processed tick.
+      riscv_port_last_tick = next_tick[h] - tick_period;
+      if (due > 1 && os::rtos::scheduler::started ())
+        {
+          os::rtos::interrupts::critical_section ics;
+          for (std::uint64_t i = 1; i < due; ++i)
+            {
+              os::rtos::sysclock.internal_increment_count ();
+              os::rtos::hrclock.internal_increment_count ();
+            }
+        }
       os_systick_handler ();
     }
   else
