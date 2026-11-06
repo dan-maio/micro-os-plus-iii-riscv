@@ -145,4 +145,52 @@ namespace clocks
     reg (rp2350::TICKS_RISCV_CYCLES) = 12;
     reg (rp2350::TICKS_RISCV_CTRL) = 1;
   }
+
+  // PLL_USB -> clk_usb = 48 MHz for the USB device controller, before
+  // tusb_init() (the Cortex-M pico2 board's usb_init(), register for
+  // register). Returns true if PLL_USB locked and clk_usb runs.
+  bool
+  usb_init (void)
+  {
+    constexpr std::uint32_t PLL_USB_BASE = 0x40058000u;
+    constexpr std::uint32_t RESET_PLL_USB = 1u << 15;
+    constexpr std::uint32_t RESET_USBCTRL = 1u << 28;
+    const std::uint32_t b = PLL_USB_BASE;
+    const std::uint32_t c = rp2350::CLOCKS_BASE;
+    constexpr std::uint32_t CLK_USB_CTRL = 0x60, CLK_USB_ENABLE = 1u << 11,
+                            CLK_USB_AUX = 0xE0, CLK_USB_AUX_LSB = 5;
+
+    // Hold the controller in reset while PLL_USB / clk_usb change; take
+    // clk_usb down first; power-cycle PLL_USB so the writes below take
+    // effect after a warm reset (a live, locked PLL ignores them).
+    reset_block (RESET_USBCTRL);
+    reg (c + CLK_USB_CTRL) &= ~CLK_USB_ENABLE;
+    reset_block (RESET_PLL_USB);
+    rp2350::unreset_block (RESET_PLL_USB);
+    reg (b + PLL_CS) = 1;          // REFDIV = 1
+    reg (b + PLL_FBDIV_INT) = 100; // VCO = 12 * 100 = 1200 MHz
+    reg (b + PLL_PWR) &= ~(PLL_PWR_PD | PLL_PWR_VCOPD);
+    bool locked = false;
+    for (std::uint32_t n = 0; n < 5000000u; ++n)
+      {
+        if (reg (b + PLL_CS) & PLL_CS_LOCK)
+          {
+            locked = true;
+            break;
+          }
+      }
+    if (!locked)
+      {
+        return false;
+      }
+    reg (b + PLL_PRIM) = (5u << 16) | (5u << 12); // /5 /5 = 48 MHz
+    reg (b + PLL_PWR) &= ~PLL_PWR_POSTDIVPD;
+
+    // clk_usb = PLL_USB, /1.
+    reg (c + CLK_USB_CTRL + CLK_DIV) = CLK_DIV_UNDIVIDED;
+    reg (c + CLK_USB_CTRL)
+        = (reg (c + CLK_USB_CTRL) & ~CLK_USB_AUX) | (0u << CLK_USB_AUX_LSB);
+    reg (c + CLK_USB_CTRL) |= CLK_USB_ENABLE;
+    return true;
+  }
 } // namespace clocks

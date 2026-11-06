@@ -7,12 +7,44 @@
 # -----------------------------------------------------------------------------
 
 set (_pico2_smp_tests smp-test2 smp-test3 smp-test4 smp-test5 smp-test-ko smp-mat-test
-     smp-mat-test-ram)
+     smp-mat-test-ram smp-test-usb-cdc-acm smp-test-usb-hid)
 
 # Tests that program RP2350 peripherals directly (TIMER0, SIO): hardware
 # only, as on the Cortex-M Pico 2 board.
 set (BOARD_TEST_HWD_ONLY smp-test0 smp-test3 smp-test4 smp-test5 smp-test-ko smp-mat-test
-     smp-mat-test-ram cmsis-os-validator-ram mutex-stress-ram rtos-apis-ram)
+     smp-mat-test-ram cmsis-os-validator-ram mutex-stress-ram rtos-apis-ram
+     smp-test-usb-cdc-acm smp-test-usb-hid)
+
+# The two USB device tests link TinyUSB with their class driver and its
+# tusb_config.h. A plain Pico 2 has no WS2812 (the Cortex-M CDC test was
+# brought up on an RP2350B-MINI-A, RGB LED on GPIO20): PICO2_HAS_WS2812 stays
+# undefined, and ws2812.hpp's inline stubs stand in.
+set (_usb_cdc_tests smp-test-usb-cdc-acm)
+set (_usb_hid_tests smp-test-usb-hid)
+
+function (board_test_sources _app _out)
+  if ("${_app}" IN_LIST _usb_cdc_tests)
+    set (${_out} ${UOS_BOARD_USB_CORE_SOURCES} ${UOS_BOARD_USB_CDC_SOURCES}
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _usb_hid_tests)
+    set (${_out} ${UOS_BOARD_USB_CORE_SOURCES} ${UOS_BOARD_USB_HID_SOURCES}
+         PARENT_SCOPE)
+  else ()
+    set (${_out} "" PARENT_SCOPE)
+  endif ()
+endfunction ()
+
+function (board_test_includes _app _out)
+  if ("${_app}" IN_LIST _usb_cdc_tests)
+    set (${_out} "${UOS_BOARD_USB_CDC_INCLUDE}" ${UOS_BOARD_USB_INCLUDE}
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _usb_hid_tests)
+    set (${_out} "${UOS_BOARD_USB_HID_INCLUDE}" ${UOS_BOARD_USB_INCLUDE}
+         PARENT_SCOPE)
+  else ()
+    set (${_out} "" PARENT_SCOPE)
+  endif ()
+endfunction ()
 
 # `<name>-ram`: the same program run from SRAM, loaded over the debugger
 # (linker-ram.ld; hw.sh switches to a RAM session when the image's entry is

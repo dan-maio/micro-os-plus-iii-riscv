@@ -365,8 +365,25 @@ Pico 2 (Raspberry Pi Debug Probe), one run after the semihosting change:
 | rtos-apis-ram (harness) | 1 | **PASS** from SRAM | hw only |
 | cmsis-os-validator-ram (harness) | 1 | **PASS** from SRAM | hw only |
 
-18 of the 20 Cortex-M Pico 2 tests pass on the RISC-V Pico 2. Still to port:
-the two USB tests (smp-test-usb-cdc-acm, smp-test-usb-hid).
+| smp-test-usb-cdc-acm | 2 | **PASS** -- enumerates as `cafe:4013`, echoes the host's line, Escape ends it | hw only |
+| smp-test-usb-hid | 2 | **PASS** -- enumerates as `cafe:4012`, HID OUTPUT reports, Escape ends it | hw only |
+
+**All 20 Cortex-M Pico 2 tests pass on the RISC-V Pico 2.**
+
+**USB** (`test/boards/pico2/usb/`): TinyUSB, its RP2040/RP2350 device driver
+and the pico-sdk shim, as the Cortex-M board carries them, with the Arm parts
+made RISC-V (barriers -> `fence`, PRIMASK critical sections -> `mstatus.MIE`,
+`sev` -> `h3.unblock`); the USB IRQ goes through Xh3irq; `clocks::usb_init()`
+(PLL_USB -> 48 MHz). Linked only into the two USB tests. The Pico 2 has no
+WS2812 (the Cortex-M CDC test was brought up on an RP2350B-MINI-A), so
+`ws2812.hpp`'s stubs stand in. The Pico 2's own micro-USB must be connected to
+the PC.
+
+The PC's half: `test/boards/pico2/usb-host.py cdc|hid` waits for the device,
+then sends a line and Escape -- on the CDC tty (Escape **followed by Return**:
+the test reads lines), or as HID OUTPUT reports (`{length, chars}`, 64 bytes,
+pyusb; detaching `usbhid` usually needs `sudo` or a udev rule). `hw.sh` starts
+it for the two USB tests; `HOST_HELPER=0` leaves it to you.
 
 **Bare runtime** (`micro-os-plus::riscv-bare`, for `BOARD_TEST_NO_KERNEL`):
 the board, `startup.S`, `trap.S` and `src/bare/runtime.cpp` -- start-up hooks

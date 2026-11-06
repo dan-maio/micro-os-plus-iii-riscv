@@ -144,6 +144,18 @@ echo "== Pico 2 (RISC-V) : $APP ($MODE, entry $ENTRY) =="
   > >(tee "$LOG") 2>&1 &
 OCD_PID=$!
 
+# The USB device tests need the PC's half (they pass when the host sends
+# Escape): usb-host.py waits for the device to enumerate on this PC and plays
+# it. The Pico 2's own micro-USB must be connected to the PC.
+HOST_PID=""
+HOST_LOG="$LOGS/${APP}.host.log"
+# HOST_HELPER=0: do not start it (you play the host side yourself).
+case "${HOST_HELPER:-1}:$APP" in
+  0:*) ;;
+  *:smp-test-usb-cdc-acm) python3 -I "$HERE/usb-host.py" cdc "$SECS" > "$HOST_LOG" 2>&1 & HOST_PID=$! ;;
+  *:smp-test-usb-hid)   python3 -I "$HERE/usb-host.py" hid "$SECS" > "$HOST_LOG" 2>&1 & HOST_PID=$! ;;
+esac
+
 EXIT_WAIT=20
 waited=0 rc=2
 while (( waited < SECS )); do
@@ -172,6 +184,11 @@ fi
 wait "$OCD_PID" 2>/dev/null
 ocd_status=$?
 sleep 1 # let tee (the log) catch up
+if [[ -n "$HOST_PID" ]]; then
+  kill "$HOST_PID" 2>/dev/null
+  wait "$HOST_PID" 2>/dev/null
+  sed 's/^/  /' "$HOST_LOG"
+fi
 
 exit_code=""
 if (( ! stopped_by_us )) && grep -q 'RESULT: \(PASS\|FAIL\|SKIP\)' "$LOG" 2>/dev/null; then

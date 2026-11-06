@@ -30,3 +30,28 @@ set (UOS_BOARD_LIBS "")
 set (UOS_BOARD_DEFINES
      SEMIHOST_TRAP_CHOSEN
      "PORT_GREETING=\"µOS++ Raspberry Pi Pico 2 (RP2350, 2x Hazard3 RV32)\"")
+
+# The USB device stack (TinyUSB, its RP2040/RP2350 device driver and the
+# pico-sdk shim it needs), as the Cortex-M pico2 board carries it, made
+# RISC-V where it was Arm (barriers, critical sections). Only the USB tests
+# link it (test/pico2/tests.cmake), so it is not under src/.
+set (UOS_BOARD_USB_INCLUDE
+     "${CMAKE_CURRENT_LIST_DIR}/usb/tinyusb"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/pico-shim")
+set (UOS_BOARD_USB_CORE_SOURCES
+     "${CMAKE_CURRENT_LIST_DIR}/usb/tinyusb/tusb.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/tinyusb/common/tusb_fifo.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/tinyusb/device/usbd.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/tinyusb/portable/raspberrypi/rp2040/dcd_rp2040.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/tinyusb/portable/raspberrypi/rp2040/rp2040_usb.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/pico-shim/pico-shim.c")
+set (UOS_BOARD_USB_CDC_INCLUDE "${CMAKE_CURRENT_LIST_DIR}/usb/cdc")
+set (UOS_BOARD_USB_CDC_SOURCES
+     "${CMAKE_CURRENT_LIST_DIR}/usb/tinyusb/class/cdc/cdc_device.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/cdc/usb_descriptors.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/cdc/usb_cdc.c")
+set (UOS_BOARD_USB_HID_INCLUDE "${CMAKE_CURRENT_LIST_DIR}/usb/hid")
+set (UOS_BOARD_USB_HID_SOURCES
+     "${CMAKE_CURRENT_LIST_DIR}/usb/tinyusb/class/hid/hid_device.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/hid/usb_descriptors.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/hid/usb_hid.c")
