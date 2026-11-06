@@ -13,12 +13,12 @@ set (_board_smp_tests smp-test-xip smp-test-xip-core1park smp-test-xip-fs smp-te
 
 # Tests that program RP2350 peripherals directly (TIMER0, SIO, ADC, QMI),
 # and the bare one: hardware only, as on the Cortex-M board.
-set (BOARD_TEST_HWD_ONLY smp-test-xip smp-test-xip-core1park smp-test-xip-fs smp-test0 smp-test3 smp-test4 smp-test5 smp-test-ko
+set (BOARD_TEST_HWD_ONLY psram-exec smp-test-xip smp-test-xip-core1park smp-test-xip-fs smp-test0 smp-test3 smp-test4 smp-test5 smp-test-ko
      smp-test-nested smp-mat-test smp-mat-test_200 smp-mat-test_250 smp-test-nested-clock
      smp-test-nested-clock_200 smp-test-nested-clock_250)
 
 # Bare-metal probes: no kernel (micro-os-plus::riscv-bare), their own main().
-set (BOARD_TEST_NO_KERNEL smp-test0)
+set (BOARD_TEST_NO_KERNEL smp-test0 psram-exec)
 
 # Data in the 8 MB PSRAM (QMI chip-select 1 = GPIO0).
 set (_psram_tests smp-mat-test smp-mat-test_200 smp-mat-test_250 smp-test-nested-clock
@@ -32,6 +32,11 @@ set (_psram_linker "${CMAKE_CURRENT_LIST_DIR}/../boards/pico2-rp2350b-psram/link
 set (_flatfs_tests smp-test-xip smp-test-xip-core1park smp-test-xip-fs)
 set (_flatfs_linker "${CMAKE_CURRENT_LIST_DIR}/../boards/pico2-rp2350b-psram/linker-flatfs.ld")
 
+# psram-exec (the Cortex-M pico2-pizero board's): a bare supervisor running
+# two applications from the PSRAM; its own linker script, and the QMI init
+# copied at start-up but called by main() (PICO2_PSRAM_COPY).
+set (_psram_exec_linker "${CMAKE_CURRENT_LIST_DIR}/../boards/pico2-rp2350b-psram/linker-psram-exec.ld")
+
 # The three that drive the clock tree themselves (potentiometer -> SYS_TABLE
 # row -> watchdog reboot) and read the ADC: the clock comes from the watchdog
 # scratch, 48 MHz on a cold boot; _200 stops at 200 MHz, the other two add
@@ -43,6 +48,9 @@ function (board_test_defines _app _out)
   set (_defs "")
   if ("${_app}" IN_LIST _psram_tests)
     list (APPEND _defs PICO2_PSRAM PICO2_PSRAM_CS_PIN=0)
+  endif ()
+  if (_app STREQUAL "psram-exec")
+    list (APPEND _defs PICO2_PSRAM_COPY PICO2_PSRAM_CS_PIN=0)
   endif ()
   if ("${_app}" IN_LIST _clock_tests)
     list (APPEND _defs PICO2_CLOCK_FROM_SCRATCH)
@@ -64,6 +72,8 @@ function (board_test_linker _app _out)
     set (${_out} "${_psram_linker}" PARENT_SCOPE)
   elseif ("${_app}" IN_LIST _flatfs_tests)
     set (${_out} "${_flatfs_linker}" PARENT_SCOPE)
+  elseif (_app STREQUAL "psram-exec")
+    set (${_out} "${_psram_exec_linker}" PARENT_SCOPE)
   else ()
     set (${_out} "" PARENT_SCOPE)
   endif ()

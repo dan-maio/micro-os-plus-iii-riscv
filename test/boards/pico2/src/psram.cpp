@@ -1,7 +1,10 @@
 /*
  * psram.cpp -- RP2350 QSPI PSRAM driver (QMI M1, CS1), port of the Cortex-M
  * pico2 board's glue/psram.cpp (itself a port of the pico-sdk PSRAM
- * examples). Built only with PICO2_PSRAM.
+ * examples). Built with PICO2_PSRAM (data in the PSRAM: start-up copies
+ * the routines and runs init() before .data) or PICO2_PSRAM_COPY (start-up
+ * only copies them; the application calls psram::init() itself -- the
+ * Cortex-M board's option of the same name, used by psram-exec).
  *
  * init() and read_id() are in .psram_ram, linked into SRAM and copied there
  * from flash by riscv_board_initialize_memory() before they are called: while
@@ -12,7 +15,7 @@
  *
  * Copyright (c) 2026 Dan. MIT license.
  */
-#if defined(PICO2_PSRAM)
+#if defined(PICO2_PSRAM) || defined(PICO2_PSRAM_COPY)
 
 #include <psram.hpp>
 
@@ -61,6 +64,17 @@ namespace
   constexpr std::uint8_t CMD_QUAD_EN = 0x35;
   constexpr std::uint8_t CMD_QUAD_READ = 0xEB;
   constexpr std::uint8_t CMD_QUAD_WRITE = 0x38;
+
+  // Pop one byte from the direct-mode RX FIFO. A real load: in C++
+  // `(void) reg (...)` on a volatile reference does not read (GCC warns
+  // "conversion to void will not access object"), so the Cortex-M original
+  // never popped the FIFO.
+  __attribute__ ((always_inline)) inline void
+  drain_rx (void)
+  {
+    const std::uint32_t v = reg (QMI_DIRECT_RX);
+    __asm__ volatile("" ::"r"(v));
+  }
 
   __attribute__ ((always_inline)) inline bool
   wait_until (volatile std::uint32_t& csr, std::uint32_t mask, bool set)
@@ -136,7 +150,7 @@ namespace psram
         for (volatile std::uint32_t j = 0; j < 20; ++j)
           {
           }
-        (void)reg (QMI_DIRECT_RX);
+        drain_rx ();
       }
 
     // 4. Leave direct mode.
@@ -194,7 +208,7 @@ namespace psram
         for (volatile std::uint32_t j = 0; j < 200; ++j)
           {
           }
-        (void)reg (QMI_DIRECT_RX);
+        drain_rx ();
       }
 
     // 0x9F + 3 address bytes, then 8 bytes in, CS1 held for the frame.
@@ -203,7 +217,7 @@ namespace psram
       {
         reg (QMI_DIRECT_TX) = (i == 0) ? 0x9Fu : 0x00u;
         wait_until (reg (QMI_DIRECT_CSR), D_BUSY, false);
-        (void)reg (QMI_DIRECT_RX);
+        drain_rx ();
       }
     for (std::uint32_t i = 0; i < 8; ++i)
       {
@@ -243,6 +257,7 @@ riscv_board_initialize_memory (void)
     }
   __asm__ volatile("fence.i" ::: "memory");
 
+#if defined(PICO2_PSRAM)
   if (!psram::init ())
     {
       riscv_psram_failed = 1;
@@ -269,6 +284,7 @@ riscv_board_initialize_memory (void)
         {
         }
     }
+#endif // PICO2_PSRAM
 }
 
-#endif // PICO2_PSRAM
+#endif // PICO2_PSRAM || PICO2_PSRAM_COPY
