@@ -125,8 +125,22 @@ for (( attempt = 1; attempt <= ATTACH_TRIES; attempt++ )); do
     > >(tee "$LOG") 2>&1 &
   OCD_PID=$!
 
+  HOST_PID=""
+  HOST_LOG="$LOGS/${APP}.host.log"
+
   waited=0 rc=2 retry=0
   while (( waited < SECS )); do
+    # The USB device tests need the PC's half (they pass when the host sends
+    # Escape): start usb-host.py only once the new image has booted and
+    # finished tusb_init(), so it never opens a stale /dev/ttyACM* left by a
+    # previous run while OpenOCD is still downloading the ELF over JTAG.
+    if [[ -z "$HOST_PID" ]] && grep -q '\[usb\] tusb_init done' "$LOG" 2>/dev/null; then
+      case "${HOST_HELPER:-1}:$APP" in
+        0:*) ;;
+        *:smp-test-usb-cdc-acm) python3 -I "$ROOT/test/boards/pico2/usb-host.py" cdc "$SECS" > "$HOST_LOG" 2>&1 & HOST_PID=$! ;;
+        *:smp-test-usb-hid)     python3 -I "$ROOT/test/boards/pico2/usb-host.py" hid "$SECS" > "$HOST_LOG" 2>&1 & HOST_PID=$! ;;
+      esac
+    fi
     # The end of a test is its semihosting exit (hw_result::ok/fail, the
     # suites' wrapper, the port's fault report all end in SYS_EXIT). With no
     # GDB connected -- this script runs OpenOCD alone -- OpenOCD handles
@@ -163,6 +177,11 @@ for (( attempt = 1; attempt <= ATTACH_TRIES; attempt++ )); do
   wait "$OCD_PID" 2>/dev/null
   ocd_status=$?
   sleep 1   # let tee (the log) catch up with what OpenOCD wrote last
+  if [[ -n "$HOST_PID" ]]; then
+    kill "$HOST_PID" 2>/dev/null
+    wait "$HOST_PID" 2>/dev/null
+    (( retry )) || sed 's/^/  /' "$HOST_LOG"
+  fi
 
   if (( retry )) || { [[ $rc -eq 4 ]] && attach_failed; }; then
     if (( attempt < ATTACH_TRIES )); then

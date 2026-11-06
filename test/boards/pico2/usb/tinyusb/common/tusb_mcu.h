@@ -533,6 +533,14 @@
   #define TUP_DCD_ENDPOINT_MAX 4
 
 //--------------------------------------------------------------------+
+// Sophgo CV180x (Milk-V Duo) -- this tree's addition. DWC2 v4.20a: 8 device
+// endpoints, UTMI+ HS PHY, 3072-word FIFO (GHWCFG2/3, read on the board)
+//--------------------------------------------------------------------+
+#elif TU_CHECK_MCU(OPT_MCU_CV180X)
+  #define TUP_USBIP_DWC2
+  #define TUP_DCD_ENDPOINT_MAX 8
+
+//--------------------------------------------------------------------+
 // Broadcom
 //--------------------------------------------------------------------+
 #elif TU_CHECK_MCU(OPT_MCU_BCM2711, OPT_MCU_BCM2835, OPT_MCU_BCM2837)

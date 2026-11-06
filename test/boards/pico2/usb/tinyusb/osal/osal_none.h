@@ -186,6 +186,10 @@ TU_ATTR_ALWAYS_INLINE static inline bool osal_queue_delete(osal_queue_t qhdl) {
 TU_ATTR_ALWAYS_INLINE static inline bool osal_queue_receive(osal_queue_t qhdl, void* data, uint32_t msec) {
   (void) msec; // not used, always behave as msec = 0
 
+  if (tu_fifo_empty(&qhdl->ff)) {
+    return false;
+  }
+
   qhdl->interrupt_set(false);
   const bool success = (tu_fifo_read_n(&qhdl->ff, data, qhdl->item_size) > 0);
   qhdl->interrupt_set(true);

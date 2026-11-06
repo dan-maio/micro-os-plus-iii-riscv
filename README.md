@@ -41,7 +41,7 @@ micro-os-plu-iii-smp-riscv-pr-github/       the workspace
         ├── boards/milkv-duo/               board.cmake, linker.ld, openocd.cfg,
         │                                   qemu.sh, hw.sh, hw-all.sh,
         │                                   hw-reset.sh + reset.cfg,
-        │                                   wait-power-cycle.sh, include/, src/
+        │                                   wait-power-cycle.sh, include/, src/, usb/
         ├── boards/pico2/                   the RP2350 sources (both RP2350 boards)
         ├── boards/pico2-rp2350b-psram/     board.cmake (includes pico2's),
         │                                   linker.ld (16 MB), linker-psram.ld,
@@ -257,6 +257,7 @@ reset!`), so the verdict is the `RESULT` line on the UART, not `hw.sh`'s exit.
 | console | UART4 `0x041C0000`, header pins 4 (TX) / 5 (RX), 115200 8N1 (set by BL2) |
 | LED | GPIOC (`0x03022000`) bit 24 (Linux GPIO 440) |
 | JTAG | TDI 1, TDO 2, TMS 16, TCK 17, GND 18; IDCODE `0x10000b6f` (T-Head/C-SKY), 1 MHz. Measured: the first OpenOCD attach after a previous session fails (IR capture / `dtmcontrol` 0), the second works -- `hw.sh` retries |
+| USB | DWC2 v4.20a at `0x04340000` (`GSNPSID = 0x4f54420a`, 8 device endpoints, UTMI+ 16-bit HS PHY, 3072-word FIFO), PLIC IRQ **30** (SG2002 TRM table 3.2); TinyUSB's DWC2 driver in slave mode (`test/boards/milkv-duo/usb/`), brought up with BL2's `cv_usb_hw_init()` + `dwc2_reconfig_usbd()` sequence |
 
 ## Build and test
 
@@ -366,12 +367,13 @@ come back. A hung board is therefore power-cycled by hand (or pin 30 RUN).
 | smp-mat-test | pico2 (Cortex-M) | the block solver at one hart, N = 300, B = 50 (the RP2350B's size), the barrier's SIO spinlock as an AMO, TIMER0 as `rdtime`: block 87.7 ms, classical 113.6 ms on the C906's FPU (RP2350B Hazard3, software float, two cores: 14.4 s / 24.0 s) |
 | smp-test-nested | RP2350B (Cortex-M), hw only | nested PLIC interrupts: DW Timer0 (priority 3, one-shot 500 us into the UART handler) must preempt UART4's handler (priority 1, its TX-empty interrupt started by a thread, busy 2 ms); DW Timer1 periodic (2). PASS needs `t2_in_uart > 0`; prints the DW timer, `rdtime` and `sysclock` elapsed times |
 | clock-catchup | RISC-V | `sysclock` follows `rdtime` within 2 % across ten 100 ms masked periods |
+| smp-test-usb-cdc-acm | pico2 (Cortex-M), hw only | USB CDC-ACM (`cafe:4013`) on the CV1800B's DWC2 controller (TinyUSB DWC2, slave mode): echoes each line ("you typed: ..."), Escape ends with PASS (`usb-host.py cdc`) |
+| smp-test-usb-hid | pico2 (Cortex-M), hw only | generic in/out USB HID (`cafe:4012`) on DWC2: receives 64-byte OUTPUT reports, prints characters on UART4, Escape ends with PASS (`usb-host.py hid`) |
 | blinky, fp-switch, instrumentation, mutex-stress, rtos-apis, cmsis-os-validator | harness suites | built under the kernel's harness only |
 
 Not carried: the two-core SMP tests (`smp-test2..5`, `smp-test-ko`, the
 nested-clock tests) -- µOS++ drives one hart on the Duo (the second C906 is a
-separate, non-coherent core); `sd_test`; the USB tests are next (TinyUSB's
-DWC2 driver, the controller set up as BL2 does it).
+separate, non-coherent core); `sd_test`.
 
 ### Status (2026-11-06)
 
@@ -568,6 +570,40 @@ semihosting exit 0 (`RESET=0`, back to back): **port tree 12/12** (368 s; the
 8 above + clock-catchup, smp-test1, smp-mat-test, smp-test-nested) and
 **harness 18/18** (757 s; the 14 + the four, rtos-apis included). Earlier the
 same day, before the new tests: port 8/8, harness 14/14.
+
+USB on the Milk-V Duo (`test/boards/milkv-duo/usb/`, 2026-11-06):
+**`smp-test-usb-cdc-acm` PASS** (`cafe:4013`, `/dev/ttyACM1`, full banner +
+line echo, Escape, exit 0) and **`smp-test-usb-hid` PASS** (`cafe:4012`,
+64-byte HID OUTPUT reports, Escape, exit 0) with `test/boards/pico2/usb-host.py`
+-- **port tree 14/14** on the Duo. Found and fixed during the DWC2 bring-up:
+
+- **CV1800B DWC2 v4.20a slave mode (`dcd_dwc2.c`)**: `GUSBCFG`
+  (`ForceDevMode | (1 << 19) | (5 << TRDT) | PHYIF16`) must be written
+  immediately after `dwc2_core_init()` *before* sizing/flushing FIFOs or
+  programming device registers (as BL2's `dwc2_reconfig_usbd()` does);
+  `dfifo_device_init()` statically programs `GRXFSIZ = 0x400`,
+  `DIEPTXF0 = 0x00400400` and `DIEPTXF[0..6]` above `0x440` before flushing,
+  and `dfifo_alloc()` is a no-op so `SET_CONFIGURATION` does not rewrite
+  `DIEPTXFn` live without a FIFO flush; `DOEPTSIZ0` uses `STUPCNT = 1` and
+  `handle_bus_reset()` does not re-flush FIFOs; `dcd_int_handler()` pops one
+  packet per `GINTSTS_RXFLVL` interrupt (polling `GRXSTSP` in a tight `do/while`
+  underflowed into 32-entry phantom `6/ep0/8` bursts); `dcd_init()` holds
+  `DCTL_SDIS` for 300 ms so the upstream hub tears down any prior enumeration.
+- **PLIC IRQ 30 starvation (`osal_none.h`)**: `osal_queue_receive()` disabled
+  and re-enabled the USB IRQ on every empty-queue poll; preempted by the 1000 Hz
+  tick while `usb_device_task` had `plic_en = 0`, PLIC source 30 stayed masked
+  throughout UART/semihosting prints. `osal_queue_receive()` now returns `false`
+  immediately when `tu_fifo_empty(&qhdl->ff)` is true, and `usb_device_task`
+  guards `tud_task()` with `tud_task_event_ready()`.
+- **Post-reset SETUP drop (`usbd.c`)**: `usbd_reset()` zeroed
+  `_usbd_queued_setup` when `DCD_EVENT_BUS_RESET` was dequeued from `_usbd_q`,
+  which wiped the count of post-reset `DCD_EVENT_SETUP_RECEIVED` events already
+  queued behind `DCD_EVENT_BUS_RESET` in the FIFO and caused `tud_task()` to
+  discard `GET_DESCRIPTOR`.
+- **Host helper timing (`milkv-duo/hw.sh`)**: JTAG `halt` stops the C906 core
+  without resetting the DWC2 peripheral, so a previous run's `/dev/ttyACM*`
+  stays alive during OpenOCD's 2.2 s `load_image`; `hw.sh` starts `usb-host.py`
+  only once `[usb] tusb_init done` appears in the log.
 
 Found on the way: the tick dropped missed periods -- smp-test-nested measured
 `sysclock` 19 s against 45 s of `rdtime` and DW timer (semihosting halts the

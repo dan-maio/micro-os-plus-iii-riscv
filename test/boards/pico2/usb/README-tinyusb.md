@@ -185,3 +185,19 @@ with `kbd_forward`), through the JTAGprobe over SWD at 15 MHz:
 xpm run test-smp-test-usb-cdc-acm-hwd --config cortexm-pico-cmake-gcc-debug
 xpm run test-smp-test-usb-hid-hwd     --config cortexm-pico-cmake-gcc-debug
 ```
+
+## The `milkv-duo` (CV1800B DWC2) board
+
+On the Milk-V Duo (Sophgo CV1800B, C906 RV64GC), the same TinyUSB core,
+descriptors and `cdc/` + `hid/` glue in this directory are linked with
+TinyUSB's Synopsys DWC2 device driver in slave mode (`test/boards/milkv-duo/usb/`):
+
+| File | Milk-V Duo role |
+|---|---|
+| `duo-usb.cpp`, `duo-usb.h` | BL2's `cv_usb_hw_init()` clock gates, soft reset, PHY B-device override, `REG_USB_ECO_RXF`, and PLIC IRQ 30 (`duo_irq`) |
+| `dwc2/dwc2_cv180x.h` | DWC2 base `0x04340000`, 8 endpoints, 3072-word DFIFO, PLIC enable/disable hooks |
+| `dwc2/dcd_dwc2.c`, `dwc2/dwc2_common.c` | TinyUSB DWC2 slave-mode driver adapted for the CV1800B v4.20a core (`GUSBCFG` `ForceDevMode | PHYIF16 | TRDT=5` before FIFO init, static `GRXFSIZ`/`DIEPTXF0`/`DIEPTXF[0..6]`, `DOEPTSIZ0.STUPCNT = 1`, one packet popped per `RXFLVL` IRQ, 300 ms `DCTL_SDIS` disconnect on init) |
+| `cdc/tusb_config.h`, `hid/tusb_config.h` | `OPT_MCU_CV180X`, `CFG_TUD_DWC2_SLAVE_ENABLE = 1`, `CFG_TUD_DWC2_DMA_ENABLE = 0` |
+
+Both tests (`smp-test-usb-cdc-acm` and `smp-test-usb-hid`) pass on the Milk-V
+Duo (2026-11-06) with `usb-host.py` started by `test/boards/milkv-duo/hw.sh`.
