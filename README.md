@@ -11,6 +11,9 @@ two Hazard3 cores (RV32IMAC, no FPU), µOS++ SMP on both -- see *RV32 and the
 Pico 2*, *SMP* and *Pico 2 hardware* below. Third board: **WeAct RP2350B**
 (16 MB flash, 8 MB QSPI PSRAM) -- the Pico 2's sources with the data in the
 PSRAM, the clock table and the 250 MHz overclock; see *WeAct RP2350B*.
+Fourth board: **StarFive VisionFive 2 Lite** (JH-7110S, four SiFive U74
+RV64GC harts + one S7 monitor hart), µOS++ on one U74 in M-mode, every test
+loaded into and run from DDR -- see *StarFive VisionFive 2 Lite*.
 
 ## Layout
 
@@ -46,8 +49,12 @@ micro-os-plu-iii-smp-riscv-pr-github/       the workspace
         ├── boards/pico2-rp2350b-psram/     board.cmake (includes pico2's),
         │                                   linker.ld (16 MB), linker-psram.ld,
         │                                   hw.sh, qemu.sh
+        ├── boards/visionfive2-lite/        board.cmake, linker.ld (DDR),
+        │                                   jh7110_daplink.cfg, hw.sh,
+        │                                   include/, src/
         ├── milkv-duo/, pico2/,             one directory per test application
-        └── pico2-rp2350b-psram/
+        ├── pico2-rp2350b-psram/
+        └── visionfive2-lite/
 ```
 
 ## The port
@@ -259,6 +266,53 @@ reset!`), so the verdict is the `RESULT` line on the UART, not `hw.sh`'s exit.
 | JTAG | TDI 1, TDO 2, TMS 16, TCK 17, GND 18; IDCODE `0x10000b6f` (T-Head/C-SKY), 1 MHz. Measured: the first OpenOCD attach after a previous session fails (IR capture / `dtmcontrol` 0), the second works -- `hw.sh` retries |
 | USB | DWC2 v4.20a at `0x04340000` (`GSNPSID = 0x4f54420a`, 8 device endpoints, UTMI+ 16-bit HS PHY, 3072-word FIFO), PLIC IRQ **30** (SG2002 TRM table 3.2); TinyUSB's DWC2 driver in slave mode (`test/boards/milkv-duo/usb/`), brought up with BL2's `cv_usb_hw_init()` + `dwc2_reconfig_usbd()` sequence |
 
+## StarFive VisionFive 2 Lite (test/boards/visionfive2-lite)
+
+JH-7110S: a U74-MC complex -- hart 0 is the S7 monitor core (rv64imac, no
+MMU, not used), harts 1..4 are SiFive U74 (`rv64imafdc_zba_zbb`, Sv39).
+µOS++ runs on **hart 1** in M-mode, `OS_NCPU = 1`; harts 2..4 stay
+debug-halted. The board is left at the **U-Boot prompt** (SPL has trained
+the DDR, U-Boot has set up UART0); OpenOCD loads each test into DDR at
+`0x40200000` and starts it there -- nothing is written to flash or SD.
+Build: `cmake -S . -B test/build-vf2 -G Ninja -D BOARD=visionfive2-lite -D
+CMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-none-elf.cmake`; hardware images
+only (no QEMU stand-in).
+
+| | |
+|---|---|
+| sources | Linux `jh7110.dtsi` / `jh7110-common.dtsi`, the SiFive U7 core complex manual (`vic_u7_manual`), the JH7110 TRM (preliminary V2), `JH-7110S Bare-Metal.md` |
+| flags | `-march=rv64imafdc_zicsr_zifencei_zba_zbb -mabi=lp64d -mcmodel=medany -mtune=sifive-7-series` (the same `rv64imafdc_zicsr_zaamo_zalrsc/lp64d` multilib as the Duo) |
+| memory | `linker.ld`: everything -- code, data, stacks, heap, page tables -- in a 32 MiB DDR window at `0x40200000` (OpenSBI's `FW_JUMP_ADDR`); OpenSBI at `0x40000000` is left alone |
+| timebase | 4 MHz (`timebase-frequency`) |
+| CLINT | `0x02000000`, standard SiFive (64-bit `mtimecmp`/`mtime`). The U7 manual lists no `time` CSR, so the clock is **`mtime` over MMIO** (`TIME_CSR = false`, `MTIME_READABLE = true`); measured by clock-test: `sleep_for(100)` = 99 999 µs, 1000 ticks = 999 999 µs |
+| hart index | the CLINT is indexed by mhartid (hart 0 = S7); the board's `BOOT_HART = 1` offsets `CLINT_MSIP`/`CLINT_MTIMECMP` to hart 1's slot, so the port's hart 0 is mhartid 1 and no port code changed |
+| PLIC | `0x0C000000`, 136 sources; contexts in `interrupts-extended` order (0 = hart 0 M, then M and S per U74): hart 1 M-mode = **context 1**; start-up disables its sources and sets the threshold to 7 |
+| MMU | standard Sv39 PTEs (no T-Head attributes): CLINT, PLIC, UART0..2, sys_syscon/sysgpio, aon_syscon/aongpio, and the first GiB of DDR. mmu-test's alias moved to `0x80000000` (`0x40000000` is mapped DDR here) |
+| misaligned | the U74 traps misaligned loads/stores (U7 manual, data memory system): mmu-test's misaligned step is not run |
+| console | UART0 `0x10000000` (DW 8250, reg-shift 2), GPIO5 TX / GPIO6 RX, 115200 8N1 as U-Boot left it (the divisor is kept) |
+| LED | `gpio-leds` on **AON GPIO 3**, active high; AON IOMUX `0x17020000` (TRM 2.8.8): DOEN byte at +0x0 (index 0 = output enabled), DOUT byte at +0x4 (0 low / 1 high) |
+| park loop | `riscv_board_park` (`src/board.cpp`, section `.text.park`, kept by `linker.ld`): a jump to itself, used by `hw.sh` |
+
+### OpenOCD on the VisionFive 2 Lite (jh7110_daplink.cfg, hw.sh)
+
+`jh7110_daplink.cfg` is the user's `~/Desktop/jh7110_daplink.cfg`, adapted;
+everything below was measured on the board (2026-11-06).
+
+| | |
+|---|---|
+| probe | DAPLink **0d28:0204**, firmware 0255, **CMSIS-DAP v1 (HID only)**. The cfg also accepts the Sipeed d6e7:3507 (CMSIS-DAP v2, bulk, ~40 KiB/s on the Duo) first, if it is plugged in |
+| speed | HID costs one 1 ms USB frame per debug-module word: **3.3 KiB/s** loads (44 KiB in 13.4 s), ~**0.8 s per semihosting call**. Neither TCK (2, 4, 10 MHz all 13.4 s) nor the access path (system bus: same load, slower verify; abstract memory access: not supported) changes it. A test takes 50..95 s; smp-mat-test (1.3 MiB) ~7 min of load |
+| scan chain | two TAPs as in the original cfg (E24, then U74-MC), but **both read IDCODE `0x07110cfd`**: the expected `0x20000c2f` of the first is not what the chip reports. OpenOCD complains and uses the chain anyway; debugging works |
+| debug module | 5 harts (`found 5 harts`), `misa 0x800000000094112f`, progbuf 16, datacount 2; abstract CSR reads/writes unsupported (OpenOCD falls back to the progbuf) |
+| targets | four **independent** targets `jh7110.cpu1..4` (`-coreid 1..4`); no `init`/`halt`/`echo` at the end (hw.sh drives the session) |
+| no `target smp` | with the SMP group, OpenOCD's semihosting handler resumed one hart of four (`3 harts should remain halted, and 1 should resume`) and the program's registers were wrong after the first call -- every run. Also: in a group, `resume <addr>` sends **every** hart to `<addr>` (three harts ran the test at once on the UART) |
+| `reset halt` | optional (`HW_RESET=1 hw.sh <test>`): measured not to touch DDR or UART0 (LCR stays 0x03), and the chip stays stable after it; the default is a plain halt of the U-Boot-booted board. U-Boot's `starfive_visionfive2_defconfig` enables no watchdog |
+| **semihosting state** | a hart left halted on the **previous** session's semihosting `exit` ebreak (`dcsr.cause = 1`) did **not** halt on its semihosting ebreaks in the next session, although `dcsr.ebreakm` read 1: runs strictly alternated PASS / hang (UART showing PASS, OpenOCD seeing nothing). `hw.sh` therefore loads the image, runs hart 1 on `riscv_board_park` for 100 ms and stops it with a halt request (`dcsr.cause = 3`) before `reg pc _start; resume` -- then 4/4 back-to-back PASS |
+| console copy | `src/uart.cpp` copies each console write to semihosting with **`SYS_WRITE`** (one bulk read of the buffer), not `SYS_WRITE0` (one probe round trip per byte, which on this probe ended in link errors) |
+| session | `init` -> halt harts 2, 3, 4, 1 -> `load_image` -> `reg priv 3` -> park, resume, 100 ms, halt -> `arm semihosting enable` -> `reg pc <entry>` -> `resume`. The verdict is the semihosting exit (OpenOCD's exit status) checked against the `RESULT` line |
+| diagnostics | every run keeps a timestamped log in `test/build-vf2/.hw-logs/`; on a timeout `hw.sh` asks the live OpenOCD (Tcl port 6666) for hart 1's `pc mcause mepc mtval ra sp mstatus dcsr` and the port's `riscv_semihosting_absent` before stopping it |
+| wiring | 40-pin header: TMS 35, TCK 37, TDI 38, TDO 40, GND 39 (pin 36 = reset, not used); console UART0 TX pin 8, RX pin 10 |
+
 ## Build and test
 
 Toolchain: xPack `riscv-none-elf-gcc` 15.2.0-1.1 (found under `~/.local/xPacks`).
@@ -376,6 +430,13 @@ nested-clock tests) -- µOS++ drives one hart on the Duo (the second C906 is a
 separate, non-coherent core); `sd_test`.
 
 ### Status (2026-11-06)
+
+StarFive VisionFive 2 Lite (DAPLink, full console over semihosting, every
+test in DDR): **9/9 PASS** -- smp_test0 (4 back-to-back runs), semihosting-test,
+clock-test, clock-catchup (sysclock 1500 ms vs mtime 1499 ms), mmu-test,
+exc-test (50 illegal + 50 ecall traps, registers intact), mos-test1,
+sc-test-ko, smp-test1. smp-mat-test built, not run (1.3 MiB, ~7 min load with
+this probe).
 
 RV32 (phase 1 of the Pico 2 port): the Duo's tests built for the RV32 stand-in
 (`test/build-rv32`): **7 passed, mmu-test skipped** (no MMU on RV32). RV64
