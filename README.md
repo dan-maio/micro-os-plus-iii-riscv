@@ -677,8 +677,10 @@ the same 33 sections as debug, cmsis-os-validator 60/60.
 USB on the CH32V307 (2026-11-07): **usb-cdc-stream PASS** -- enumerated at
 **high speed** on P6 (`cafe:4014 TinyUSB CH32V307 CDC-ACM`), 1 MiB streamed
 through the board in 565 ms (1812 KiB/s each way), board CRC-32 agreeing,
-`name.dat.back` identical. The rate is the test loop's, not the link's: at
-most 512 bytes per step and a 1 ms sleep whenever TinyUSB has no event.
+`name.dat.back` identical; a second run, `usb-stream-host.py` started by
+hand and waiting for the device: 396 ms (2585 KiB/s each way), identical
+again. The rate is the test loop's, not the link's: at most 512 bytes per
+step and a 1 ms sleep whenever TinyUSB has no event.
 
 StarFive VisionFive 2 Lite, JTAG probe on Pico at 10 MHz, full console over
 semihosting, every test in DDR, **every test on all four U74**: **11/11
