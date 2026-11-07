@@ -25,6 +25,9 @@ target/
 .hw-jlink-run*
 .qemu-verify/
 **/disk*.img
+# The USB file tests' copy written back by the PC (usb-file-host.py)
+**/name.dat.back
+__pycache__/
 
 # Editors / OS
 *.swp
