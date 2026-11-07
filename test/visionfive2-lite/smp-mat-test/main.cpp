@@ -14,7 +14,8 @@
  *
  * Solves A x = b (N x N, diagonally dominant) three ways:
  *   1. a Thread-Pool demo (10 workers, 20 tasks) proving cross-core task
- *      distribution through a semaphore+mutex pool;
+ *      distribution through a semaphore+mutex pool: worker i runs on CPU
+ *      i % OS_NCPU, and every core must execute at least one task;
  *   2. a PARALLEL BLOCK elimination (the real test): block Gaussian
  *      elimination with block size B, row blocks distributed across the two
  *      cores, synchronized by generation-based spin BARRIERS, with core 0
@@ -311,12 +312,27 @@ static ThreadPool g_pool;
 static char pool_thread_names[POOL_SIZE][16];
 static thread::stack::element_t pool_stacks[POOL_SIZE][512];
 static thread* pool_threads[POOL_SIZE];
+static int pool_worker_index[POOL_SIZE];
 
 static void*
 pool_worker_func (void* arg)
 {
-  ThreadPool* pool = static_cast<ThreadPool*> (arg);
-  pool->worker_loop ();
+  const int i = *static_cast<int*> (arg);
+#if OS_NCPU > 1
+  // Pin first, then get there, as the solvers do: a new thread runs on the
+  // core that created it (CPU 0, os_main) and stays there -- the affinity
+  // ThreadPool::start() sets after the creation came too late (measured:
+  // all 20 tasks on CPU 0). Worker i belongs to CPU i % OS_NCPU.
+  const unsigned cpu = static_cast<unsigned> (i % OS_NCPU);
+  this_thread::thread ().cpu_affinity (1u << cpu);
+  while (current_cpu () != cpu)
+    {
+      this_thread::yield ();
+    }
+#else
+  (void)i;
+#endif
+  g_pool.worker_loop ();
   return nullptr;
 }
 
@@ -331,8 +347,9 @@ ThreadPool::start ()
 
       std::snprintf (pool_thread_names[i], 16, "pool_%02d", i);
 
-      pool_threads[i]
-          = new thread (pool_thread_names[i], pool_worker_func, this, attr);
+      pool_worker_index[i] = i;
+      pool_threads[i] = new thread (pool_thread_names[i], pool_worker_func,
+                                    &pool_worker_index[i], attr);
 #if OS_NCPU > 1
       pool_threads[i]->cpu_affinity (1u << (i % OS_NCPU));
 #endif
@@ -378,6 +395,7 @@ ThreadPool::worker_loop ()
 }
 
 static volatile int g_pool_task_count = 0;
+static volatile unsigned g_pool_tasks_on_cpu[OS_NCPU];
 static mutex g_pool_print_mutex;
 
 static void
@@ -393,6 +411,7 @@ pool_demo_task (void* arg)
   write_fmt ("Thread Pool: Worker executed task %d on CPU %u (mhartid %u)\n",
              id, current_cpu (), current_mhartid ());
   g_pool_task_count = g_pool_task_count + 1;
+  g_pool_tasks_on_cpu[current_cpu ()] = g_pool_tasks_on_cpu[current_cpu ()] + 1;
   g_pool_print_mutex.unlock ();
 }
 
@@ -880,7 +899,16 @@ os_main (int /*argc*/, char* /*argv*/[])
     {
       sysclock.sleep_for (10);
     }
-  write_str ("Thread Pool demo finished. All 20 tasks executed successfully.\n\n");
+  write_str ("Thread Pool demo finished. All 20 tasks executed successfully.\n");
+  // Tasks per CPU: every core must have run some (a real SMP pool).
+  bool pool_ok = true;
+  write_str ("Thread Pool: tasks per CPU:");
+  for (unsigned c = 0; c < OS_NCPU; ++c)
+    {
+      write_fmt (" CPU %u = %u", c, g_pool_tasks_on_cpu[c]);
+      pool_ok = pool_ok && (g_pool_tasks_on_cpu[c] > 0);
+    }
+  write_str (pool_ok ? "  (every core)\n\n" : "  (NOT every core)\n\n");
 
   // ---- Validate blocks / generate the diagonally dominant system -----------
   if (N % B != 0)
@@ -1041,10 +1069,12 @@ os_main (int /*argc*/, char* /*argv*/[])
       write_fmt ("  solver_c%u ran on mhartid %u\n", c, solver_mhartid[c]);
       cores_ok = cores_ok && (solver_mhartid[c] == c + RISCV_HART_BASE);
     }
-  bool pass = (max_diff < 0.01f) && cores_ok;
+  bool pass = (max_diff < 0.01f) && cores_ok && pool_ok;
   write_fmt ("RESULT: %s\n",
-             pass ? "PASS (block == classical within tolerance, one solver per core)"
-                  : (cores_ok ? "FAIL (solutions differ)" : "FAIL (a solver ran on the wrong core)"));
+             pass ? "PASS (block == classical, one solver per core, pool on every core)"
+                  : (!cores_ok ? "FAIL (a solver ran on the wrong core)"
+                     : (!pool_ok ? "FAIL (the thread pool did not use every core)"
+                                 : "FAIL (solutions differ)")));
   write_str ("---------------------------------------------\n");
 
   // End the run with the verdict (semihosting exit).
