@@ -16,7 +16,7 @@ before the number decreases to 0.”*
 | `jh7110_wdt_reset.cfg` | **software reset** through the JH7110 watchdog |
 | `jh7110_wdt_disable.cfg` | stop a watchdog left running after the reset |
 | `jh7110_jtag_key.cfg` | inject a U-Boot key through UART0 loopback (JTAG only) |
-| `jh7110_daplink_srst.cfg` | OpenOCD config with SRST enabled (pin 36) |
+| `jh7110_daplink_srst.cfg` | SRST enabled — only if wired to the board reset net, **not** pin 36 |
 | `jh7110_daplink.cfg` | the normal JTAG config (diagnostics) |
 | `vf2-j20.png` | crop of the QSG showing the J20 fastboot pins |
 
@@ -67,10 +67,15 @@ the script waits 10 s after arming before disarming.
 
 ---
 
-## Method 2 — SRST through the JTAG probe
+## Method 2 — SRST through the JTAG probe (only with a real reset net)
 
-Wire the probe’s **RST/SRST** to the 40-pin header **pin 36** (GND pin 39),
-then:
+This is **not** pin 36. On both the VisionFive 2 and the VisionFive 2 Lite,
+40-pin header pin 36 is **GPIO36**, not reset. The full VisionFive 2 has a
+separate Reset button; the Lite has no reset button.
+
+Wire the probe’s **RST/SRST** to the board’s actual reset net (for example
+the full VisionFive 2 Reset-button net, or a documented reset test point).
+Then:
 
 ```bash
 RESET=srst ./vf2-reset-to-uboot.sh /dev/ttyUSB0 15
@@ -182,7 +187,8 @@ board power-on reset.
 The real reset sources are:
 
 - the **JH7110 watchdog** — Method 1;
-- the **pad reset** on pin 36 — Method 2;
+- the **pad reset** — only where a Reset button/reset net exists (full
+  VisionFive 2); **not** 40-pin pin 36 (that is GPIO36);
 - **power cycling** — Method 3.
 
 ---
