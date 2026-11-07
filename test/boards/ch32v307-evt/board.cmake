@@ -37,3 +37,25 @@ set (UOS_BOARD_DEFINES
      OS_INTEGER_RTOS_DEFAULT_STACK_SIZE_BYTES=2048
      SEMIHOST_TRAP_CHOSEN
      "PORT_GREETING=\"µOS++ WCH CH32V307V-EVT (QingKe V4F RV32)\"")
+
+# USB device on the high-speed port P6 (USBHS): the TinyUSB core and CDC
+# class the Pico 2 carries (test/boards/pico2/usb/tinyusb), with TinyUSB's
+# WCH USBHS driver from the same TinyUSB commit (portable/wch), the bring-up
+# (usb/ch32-usb.cpp: clocks, interrupt), the shim for the one WCH header the
+# driver includes (usb/wch-shim/ch32v30x.h), and this board's high-speed
+# configuration and descriptors (usb/cdc). Linked only into the USB tests
+# (test/ch32v307-evt/tests.cmake).
+set (_pico2_usb "${CMAKE_CURRENT_LIST_DIR}/../pico2/usb")
+set (UOS_BOARD_USB_INCLUDE
+     "${CMAKE_CURRENT_LIST_DIR}/usb/cdc"
+     "${CMAKE_CURRENT_LIST_DIR}/usb"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/wch-shim"
+     "${_pico2_usb}/tinyusb")
+set (UOS_BOARD_USB_SOURCES
+     "${_pico2_usb}/tinyusb/tusb.c"
+     "${_pico2_usb}/tinyusb/common/tusb_fifo.c"
+     "${_pico2_usb}/tinyusb/device/usbd.c"
+     "${_pico2_usb}/tinyusb/class/cdc/cdc_device.c"
+     "${_pico2_usb}/tinyusb/portable/wch/dcd_ch32_usbhs.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/ch32-usb.cpp"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/cdc/usb_descriptors.c")

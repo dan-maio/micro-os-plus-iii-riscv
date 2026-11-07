@@ -390,7 +390,11 @@ software-raised peripheral interrupts, IRQ 16 at `0x40` and IRQ 17 at
 interrupt or inside a critical section running before the waker goes on;
 IRQ 17 nesting inside IRQ 16; the threshold holding IRQ 16 but not IRQ 17;
 IRQ 16 preempting a timer callback in the SysTick handler; 2000
-interrupt-to-thread hand-offs). Under the kernel's harness (platform
+interrupt-to-thread hand-offs), and `usb-cdc-stream` (a 1 MiB file round
+trip over USB HS on P6, streamed: the board sends each piece back as it
+arrives -- 64 KiB of SRAM cannot hold the file -- with a running CRC-32;
+the PC side is `test/ch32v307-evt/usb-cdc-stream/usb-stream-host.py`
+beside `name.dat`, run by hand once the console shows `[usb] mounted`). Under the kernel's harness (platform
 `riscv-ch32v307-evt`, xpm configurations
 `riscv-ch32v307-evt-cmake-gcc-debug|release`, CTest cases
 `riscv-ch32v307-evt-<app>-hwd`) also the suites blinky, fp-switch,
@@ -426,7 +430,7 @@ PFIC 16, WCH's WWDG vector).
 | console | USART1, **PA9 TX / PA10 RX**, 115200 8N1 (`BRR = 1250`), through the EVT's J2 jumpers to the WCH-LinkE's CDC port (`/dev/ttyACM0`) |
 | LED | **LED1 on PD0** by a jumper wire (the EVT's LEDs are not connected to the chip in its layout -- Zephyr's board page), active low |
 | key | **S2 on PA1** by a jumper wire: like the LEDs, S2 reaches the chip only through the **J3** header (WCH *Evaluation Board Reference* V1.9: "USER button S2: Connect the I/O port of the main MCU through J3 pin"); PA1 is Zephyr's choice. Active low (S2 to GND), input with the internal pull-up |
-| USB | planned: the high-speed port P6 (PB6/PB7), TinyUSB's WCH USBHS driver |
+| USB | device on the **high-speed port P6** (USBHS): TinyUSB's WCH driver `portable/wch/dcd_ch32_usbhs.c` + `ch32_usbhs_reg.h`, taken from the same TinyUSB commit as the tree the Pico 2 carries (`91fbbd192`, added to `test/boards/pico2/usb/tinyusb`). The driver includes WCH's `<ch32v30x.h>` only for the `USBHSD` register struct, `USBHS_IRQn` and `NVIC_*`: `usb/wch-shim/ch32v30x.h` gives exactly those (WCH's struct, copied with its notice; `USBHS_IRQn` = PFIC 85 = the port's IRQ 69). `usb/ch32-usb.cpp`: the USBHS clock and PHY (TinyUSB's CH32V30x board code is six WCH library calls; as registers: `RCC_CFGR2` bits 31/30 = 1, 29:28 = 01 (4 MHz reference), 27 = 0 (HSE), 26:24 = 001 (HSE / 2), `RCC_AHBPCENR` bit 11) and `USBHS_IRQHandler` -> `tud_int_handler(0)` at `0x40`; a thread runs `tud_task()`. `usb/cdc`: `tusb_config.h` (CH32V307, USBHS, high speed, no OS) and high-speed descriptors (512-byte bulk, device qualifier, other-speed configuration, as TinyUSB's cdc_msc example), VID:PID `cafe:4014` |
 
 ### Interrupts: the PFIC path (RISCV_PFIC, include/pfic.hpp)
 
@@ -669,6 +673,12 @@ latching SysTick (*Interrupts* above). Release (`-cmake-gcc-release`): **9/9
 PASS** as well -- fp-switch 967 rounds, 0 bad (calibrated to 147692 spin
 loops: the optimised hold is faster), mutex-stress within +-3 %, rtos-apis
 the same 33 sections as debug, cmsis-os-validator 60/60.
+
+USB on the CH32V307 (2026-11-07): **usb-cdc-stream PASS** -- enumerated at
+**high speed** on P6 (`cafe:4014 TinyUSB CH32V307 CDC-ACM`), 1 MiB streamed
+through the board in 565 ms (1812 KiB/s each way), board CRC-32 agreeing,
+`name.dat.back` identical. The rate is the test loop's, not the link's: at
+most 512 bytes per step and a 1 ms sleep whenever TinyUSB has no event.
 
 StarFive VisionFive 2 Lite, JTAG probe on Pico at 10 MHz, full console over
 semihosting, every test in DDR, **every test on all four U74**: **11/11
