@@ -271,10 +271,16 @@ reset!`), so the verdict is the `RESULT` line on the UART, not `hw.sh`'s exit.
 
 JH-7110S: a U74-MC complex -- hart 0 is the S7 monitor core (rv64imac, no
 MMU, not used), harts 1..4 are SiFive U74 (`rv64imafdc_zba_zbb`, Sv39).
-µOS++ runs in M-mode on **all four U74** for the SMP tests (smp-test2,
-smp-mat-test: `OS_NCPU = 4`, CPU n = mhartid n + 1, `RISCV_HART_BASE = 1`)
-and on hart 1 alone for the others (`OS_NCPU = 1`, harts 2..4 debug-halted);
-`test/visionfive2-lite/tests.cmake` chooses per test, as the Pico 2's does. The board is left at the **U-Boot prompt** (SPL has trained
+µOS++ runs in M-mode on **all four U74** in **every** test (`OS_NCPU = 4`,
+CPU n = mhartid n + 1, `RISCV_HART_BASE = 1`). smp-test2 and smp-mat-test
+start CPUs 1..3 themselves; every other test gets
+`test/visionfive2-lite/src/smp-autostart.cpp` (`test/visionfive2-lite/
+tests.cmake`): the test's `os_main()` is renamed `vf2_test_os_main()` (a
+`-D` on the test's own sources only), and the board's `os_main()` creates
+idle1..3, launches CPUs 1..3, checks that each runs its idle thread on its
+own hart (`smp: 4 cores, CPU 0 = mhartid 1, ... -- SMP running`; a core
+that does not start fails the test) and then calls the test. The test
+sources are unchanged. The board is left at the **U-Boot prompt** (SPL has trained
 the DDR, U-Boot has set up UART0); OpenOCD loads each test into DDR at
 `0x40200000` and starts it there -- nothing is written to flash or SD.
 Build: `cmake -S . -B test/build-vf2 -G Ninja -D BOARD=visionfive2-lite -D
@@ -314,6 +320,7 @@ everything below was measured on the board (2026-11-06).
 | **semihosting state** | a hart left halted on the **previous** session's semihosting `exit` ebreak (`dcsr.cause = 1`) did **not** halt on its semihosting ebreaks in the next session, although `dcsr.ebreakm` read 1: runs strictly alternated PASS / hang (UART showing PASS, OpenOCD seeing nothing). `hw.sh` therefore loads the image, runs hart 1 on `riscv_board_park` for 100 ms and stops it with a halt request (`dcsr.cause = 3`) before `reg pc _start; resume` -- then 4/4 back-to-back PASS |
 | console copy | `src/uart.cpp` copies each console write to semihosting with **`SYS_WRITE`** (one bulk read of the buffer), not `SYS_WRITE0` (one probe round trip per byte, which on this probe ended in link errors) |
 | session | `init` -> halt harts 2, 3, 4, 1 -> `load_image` -> for each hart the image drives: `reg priv 3`, park, resume, 100 ms, halt, `arm semihosting enable` -> (SMP) clear the release slots, `reg pc <entry>; resume` on harts 2..n (they park) -> `reg pc <entry>; resume` on hart 1. The verdict is the semihosting exit (OpenOCD's exit status) checked against the `RESULT` line |
+| interrupts off | before resuming any hart, `hw.sh` writes `mie = 0` and clears `mstatus.MIE` (so do the Eclipse GDB scripts). Measured 2026-11-07: a hart halted in the middle of the previous test keeps its interrupt enables and its CLINT timer is long overdue; resumed on `riscv_board_park` it took the interrupt at once and ran the **new** image's trap handler and tick before `_start` (pc away from the park after 100 ms, every run). In some runs that left the kernel lock `smp_klock` held by CPU 0 (owner 0, depth 1, no fresh acquire after `.bss` was cleared -- `.data` is not re-initialised for a RAM image), and CPUs 1..3 spun in `riscv_smp_klock_acquire` forever: "CPU n NOT RUNNING", smp-test2 workers with 0 beats, an Eclipse thread pool 20/0/0/0. With the fix: clock-test 6/6, every test PASS. `hw.sh` reports a hart that is not on the park after the 100 ms (`HW.SH PARK FAILED`) |
 | SMP images | detected from `riscv_secondary_boot` (NCPU = its size / 24). Its slots are **cleared through OpenOCD** before the harts start: the DDR keeps the previous run's, and a stale magic would release a hart before CPU 0 has set it up. Semihosting is enabled on every target: threads on any core print, and each hart halts on its own ebreak |
 | diagnostics | every run keeps a timestamped log in `test/build-vf2/.hw-logs/`; on a timeout `hw.sh` asks the live OpenOCD (Tcl port 6666) for hart 1's `pc mcause mepc mtval ra sp mstatus dcsr` and the port's `riscv_semihosting_absent` before stopping it |
 | wiring | 40-pin header: TMS 35, TCK 37, TDI 38, TDO 40, GND 39 (pin 36 = GPIO36, not reset, not used); console UART0 TX pin 8, RX pin 10 |
@@ -468,16 +475,23 @@ Not carried: the two-core SMP tests (`smp-test2..5`, `smp-test-ko`, the
 nested-clock tests) -- µOS++ drives one hart on the Duo (the second C906 is a
 separate, non-coherent core); `sd_test`.
 
-### Status (2026-11-06)
+### Status (2026-11-07)
 
-StarFive VisionFive 2 Lite (DAPLink, full console over semihosting, every
-test in DDR): **11/11 PASS**.
+StarFive VisionFive 2 Lite, JTAG probe on Pico at 10 MHz, full console over
+semihosting, every test in DDR, **every test on all four U74**: **11/11
+PASS** (8..19 s each; smp-mat-test 47 s). The nine auto-started tests each
+printed `CPU 0..3 = mhartid 1..4 -- SMP running`; smp-test2: wrk0..3 8 beats
+each on its own hart; smp-mat-test: thread-pool tasks per CPU 6/6/4/4,
+solvers c0..c3 on mhartid 1..4, speedup 5.33x.
+
+Before (2026-11-06, DAPLink, 11/11 PASS):
 - SMP on the four U74 (`OS_NCPU = 4`):
   - **smp-test2**: one worker per core, every beat read from mhartid on its
     own hart (8/8 each), global 32;
   - **smp-mat-test** (N = 240, B = 30, 8 blocks): solvers c0..c3 on mhartid
     1..4, parallel 15.9 ms against classical 60.3 ms on core 0 (**3.80x**),
-    max difference 0; thread-pool tasks spread over CPUs 0..3. (N = 200,
+    max difference 0. (The thread pool then ran all 20 tasks on CPU 0: its
+    workers were pinned only after creation; fixed 2026-11-07.) (N = 200,
     B = 50: 12.6 ms against 34.8 ms, 2.76x.)
 - One hart (`OS_NCPU = 1`): smp_test0 (4 back-to-back runs), semihosting-test,
   clock-test, clock-catchup (sysclock 1500 ms vs mtime 1499 ms), mmu-test,

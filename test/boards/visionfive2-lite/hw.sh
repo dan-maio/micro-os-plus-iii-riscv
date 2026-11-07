@@ -109,6 +109,16 @@ fi
 HARTS=""; for (( h = 1; h <= NCPU; h++ )); do HARTS="$HARTS $h"; done
 SECONDARIES=""; for (( h = 2; h <= NCPU; h++ )); do SECONDARIES="$SECONDARIES $h"; done
 
+# Machine interrupts are switched off (mie = 0, mstatus.MIE = 0) before any
+# hart is resumed. Measured 2026-11-07: a hart halted in the middle of the
+# previous test keeps its interrupt enables, and its CLINT timer is long
+# overdue -- resumed on riscv_board_park it took the interrupt at once and
+# ran the NEW image's trap handler and tick before _start, every run; in
+# some runs that left the kernel lock smp_klock held by CPU 0 (.data is not
+# re-initialised for a RAM image), and CPUs 1..3 then waited for it forever
+# ("CPU n NOT RUNNING", smp-test2 workers with 0 beats). A hart that is not
+# on the park after the 100 ms is reported in the log.
+#
 # After the load, for every hart the image drives: M-mode, a short run on
 # riscv_board_park, a plain halt (so no hart starts from a state left by the
 # previous session's semihosting ebreak -- see the header), semihosting on.
@@ -117,8 +127,12 @@ SECONDARIES=""; for (( h = 2; h <= NCPU; h++ )); do SECONDARIES="$SECONDARIES $h
 # 2..NCPU start at _start, where the port parks them, then hart 1.
 START_ARGS=()
 for h in $HARTS; do
-  START_ARGS+=(-c "targets jh7110.cpu$h" -c "reg priv 3" -c "reg pc $PARK" \
-               -c "resume" -c "sleep 100" -c "halt" -c "arm semihosting enable")
+  START_ARGS+=(-c "targets jh7110.cpu$h" -c "reg priv 3" \
+               -c "reg mie 0" \
+               -c "reg mstatus [format 0x%x [expr {[dict get [get_reg mstatus] mstatus] & ~0x8}]]" \
+               -c "reg pc $PARK" -c "resume" -c "sleep 100" -c "halt" \
+               -c "if {[dict get [get_reg pc] pc] != $PARK} { echo \"HW.SH PARK FAILED cpu$h: pc=[dict get [get_reg pc] pc] mcause=[dict get [get_reg mcause] mcause]\" }" \
+               -c "arm semihosting enable")
 done
 if (( NCPU > 1 )); then
   START_ARGS+=(-c "targets jh7110.cpu1" \

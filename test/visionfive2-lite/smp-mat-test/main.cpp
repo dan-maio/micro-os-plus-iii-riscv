@@ -291,17 +291,31 @@ public:
     head_ = 0;
     tail_ = 0;
     count_ = 0;
+    ready_ = 0;
   }
 
   void start ();
   bool submit (task_t func, void* arg);
   void worker_loop ();
 
+  // Called by a worker once it is actually running on its own core. The
+  // demo waits for all of them before submitting work; otherwise the CPU-0
+  // workers drain the queue before the workers pinned to the other cores
+  // have had a chance to be scheduled (measured in an Eclipse session:
+  // 20 tasks on CPU 0, 0 on the others, while the solver later ran on all
+  // four harts).
+  void
+  worker_ready ()
+  {
+    __atomic_add_fetch (&ready_, 1u, __ATOMIC_RELEASE);
+  }
+
 private:
   Task queue_[TASK_QUEUE_SIZE];
   int head_;
   int tail_;
   int count_;
+  volatile unsigned ready_;
 
   mutex mutex_;
   semaphore_counting sem_tasks_;
@@ -329,6 +343,7 @@ pool_worker_func (void* arg)
     {
       this_thread::yield ();
     }
+  g_pool.worker_ready ();
 #else
   (void)i;
 #endif
@@ -354,6 +369,27 @@ ThreadPool::start ()
       pool_threads[i]->cpu_affinity (1u << (i % OS_NCPU));
 #endif
     }
+
+#if OS_NCPU > 1
+  // Wait until every worker has reached its own core before submitting
+  // tasks. This is what makes the demo measure the SMP scheduler rather
+  // than the speed at which the secondary harts boot: without it, the
+  // CPU-0 workers can take all the tasks while the workers pinned to
+  // CPUs 1..N-1 are still waiting to be scheduled.
+  constexpr unsigned ready_timeout_ms = 2000;
+  for (unsigned waited = 0;
+       __atomic_load_n (&ready_, __ATOMIC_ACQUIRE) < POOL_SIZE; ++waited)
+    {
+      if (waited >= ready_timeout_ms)
+        {
+          write_fmt ("Thread Pool: warning: only %u of %u workers started; "
+                     "cores 1..%u have not scheduled their workers\n",
+                     ready_, POOL_SIZE, OS_NCPU - 1);
+          break;
+        }
+      sysclock.sleep_for (1);
+    }
+#endif
 }
 
 bool

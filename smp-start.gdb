@@ -32,13 +32,27 @@ end
 # The `reg` command acts on OpenOCD's current target, so name each target
 # explicitly. This is independent of the GDB thread numbering.
 monitor targets jh7110.cpu1
+# Machine interrupts off before the hart is resumed (mie = 0, mstatus.MIE =
+# 0). A hart halted in the middle of the previous run keeps its interrupt
+# enables, and its CLINT timer is long overdue: resumed as it is, it takes
+# the interrupt at once and runs the new image's trap handler before
+# _start -- measured 2026-11-07, that sometimes left the kernel lock held by
+# CPU 0 and CPUs 1..3 never ran (thread pool 20/0/0/0).
 monitor reg priv 3
+monitor reg mie 0
+monitor reg mstatus [format 0x%x [expr {[dict get [get_reg mstatus] mstatus] & ~0x8}]]
 monitor targets jh7110.cpu2
 monitor reg priv 3
+monitor reg mie 0
+monitor reg mstatus [format 0x%x [expr {[dict get [get_reg mstatus] mstatus] & ~0x8}]]
 monitor targets jh7110.cpu3
 monitor reg priv 3
+monitor reg mie 0
+monitor reg mstatus [format 0x%x [expr {[dict get [get_reg mstatus] mstatus] & ~0x8}]]
 monitor targets jh7110.cpu4
 monitor reg priv 3
+monitor reg mie 0
+monitor reg mstatus [format 0x%x [expr {[dict get [get_reg mstatus] mstatus] & ~0x8}]]
 monitor targets jh7110.cpu1
 
 # Set every hart's PC to _start. 'thread apply all' covers whatever thread

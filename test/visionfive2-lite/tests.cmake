@@ -12,15 +12,33 @@
 # -----------------------------------------------------------------------------
 
 # SMP: the board has four U74 harts (UOS_BOARD_NCPU 4, CPU n = mhartid n+1).
-# These tests run the kernel's SMP scheduler on all four; every other test
-# is built for one CPU (CPU 0 = hart 1), exactly as before -- the same rule
-# as the Pico 2's (test/pico2/tests.cmake).
-set (_vf2_smp_tests smp-test2 smp-mat-test)
+# EVERY test runs the kernel's SMP scheduler on all four.
+#
+#   - smp-test2 and smp-mat-test start CPUs 1..3 themselves (their own
+#     idle threads and multicore::launch_core calls, as on the Pico 2);
+#   - every other test gets src/smp-autostart.cpp: its os_main() is renamed
+#     vf2_test_os_main() (-D on the test's own sources only, so the kernel's
+#     main() still calls the board's os_main()), and smp-autostart's
+#     os_main() starts CPUs 1..3, checks that each runs on its own hart, and
+#     then calls the test. A core that does not start fails the test.
+set (_vf2_self_launching_tests smp-test2 smp-mat-test)
 
 function (board_test_ncpu _app _out)
-  if ("${_app}" IN_LIST _vf2_smp_tests)
-    set (${_out} "${UOS_BOARD_NCPU}" PARENT_SCOPE)
+  set (${_out} "${UOS_BOARD_NCPU}" PARENT_SCOPE)
+endfunction ()
+
+function (board_test_defines _app _out)
+  if ("${_app}" IN_LIST _vf2_self_launching_tests)
+    set (${_out} "" PARENT_SCOPE)
   else ()
-    set (${_out} 1 PARENT_SCOPE)
+    set (${_out} VF2_SMP_AUTOSTART=1 PARENT_SCOPE)
+  endif ()
+endfunction ()
+
+function (board_test_options _app _out)
+  if ("${_app}" IN_LIST _vf2_self_launching_tests)
+    set (${_out} "" PARENT_SCOPE)
+  else ()
+    set (${_out} -Dos_main=vf2_test_os_main PARENT_SCOPE)
   endif ()
 endfunction ()
