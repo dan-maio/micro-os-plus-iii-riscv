@@ -2,9 +2,13 @@
  * smp-autostart.cpp -- run every VisionFive 2 Lite test on all four U74s.
  *
  * Compiled into every test of this board (test/visionfive2-lite/src/), but
- * empty unless the test is built with VF2_SMP_AUTOSTART (tests.cmake): the
- * tests that start the other cores themselves (smp-test2, smp-mat-test) do
- * not get it.
+ * empty unless the test is built with VF2_SMP_AUTOSTART or is a harness
+ * suite (UOS_HARNESS_SUITE; tests.cmake): the tests that start the other
+ * cores themselves (smp-test2, smp-mat-test) do not get it.
+ *
+ * vf2_smp_start() does the work (steps 1..3 below). An auto-started test
+ * gets it from the os_main() here; a harness suite from its __wrap_os_main()
+ * (include/harness-suite.hpp), before the suite runs.
  *
  * For the others, tests.cmake renames the test's own os_main() to
  * vf2_test_os_main() (an option on the test's own sources only, so the
@@ -27,7 +31,8 @@
  * Copyright (c) 2026 Dan. MIT license.
  */
 
-#if defined(VF2_SMP_AUTOSTART) && defined(OS_NCPU) && (OS_NCPU > 1)
+#if (defined(VF2_SMP_AUTOSTART) || defined(UOS_HARNESS_SUITE)) \
+    && defined(OS_NCPU) && (OS_NCPU > 1)
 
 #include <cmsis-plus/rtos/os.h>
 
@@ -53,10 +58,7 @@ namespace os
   }
 }
 
-// The test's own os_main(), renamed by tests.cmake. The kernel header
-// declares os_main() extern "C", and the rename keeps that linkage.
-extern "C" int
-vf2_test_os_main (int argc, char* argv[]);
+#include <vf2-smp-start.hpp>
 
 namespace
 {
@@ -88,8 +90,8 @@ namespace
   }
 } // namespace
 
-int
-os_main (int argc, char* argv[])
+bool
+vf2_smp_start (void)
 {
   this_thread::thread ().cpu_affinity (1u << 0);
   uart::init (0);
@@ -151,8 +153,23 @@ os_main (int argc, char* argv[])
 
   // Let the line leave the FIFO: the test's uart::init() clears it.
   sysclock.sleep_for (20);
+  return ok;
+}
 
+#if defined(VF2_SMP_AUTOSTART)
+
+// The test's own os_main(), renamed by tests.cmake. The kernel header
+// declares os_main() extern "C", and the rename keeps that linkage.
+extern "C" int
+vf2_test_os_main (int argc, char* argv[]);
+
+int
+os_main (int argc, char* argv[])
+{
+  vf2_smp_start ();
   return vf2_test_os_main (argc, argv);
 }
 
-#endif // VF2_SMP_AUTOSTART && OS_NCPU > 1
+#endif // VF2_SMP_AUTOSTART
+
+#endif // (VF2_SMP_AUTOSTART || UOS_HARNESS_SUITE) && OS_NCPU > 1

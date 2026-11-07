@@ -484,6 +484,18 @@ printed `CPU 0..3 = mhartid 1..4 -- SMP running`; smp-test2: wrk0..3 8 beats
 each on its own hart; smp-mat-test: thread-pool tasks per CPU 6/6/4/4,
 solvers c0..c3 on mhartid 1..4, speedup 5.33x.
 
+Harness suites (kernel `tests/`, platform `riscv-visionfive2-lite`, xpm
+configurations `riscv-visionfive2-lite-cmake-gcc-debug|release`, CTest
+cases `riscv-visionfive2-lite-<app>-hwd` for all 17 applications): blinky,
+fp-switch, mutex-stress, instrumentation, rtos-apis and cmsis-os-validator,
+each on **all four U74** (`include/harness-suite.hpp`: the
+`__wrap_os_main()` calls `vf2_smp_start()` before the suite) -- **6/6 PASS**
+(8..86 s). fp-switch now really tests the FPU on RISC-V (it had an Arm path
+only and printed "no FPU, nothing to test" here and on the Duo): f0-f31
+(64-bit) and fflags held across preemption, the hold calibrated to about 3
+ticks, and on SMP at least one round must resume on another core --
+3894 rounds, 0 bad, 860 migrated.
+
 Before (2026-11-06, DAPLink, 11/11 PASS):
 - SMP on the four U74 (`OS_NCPU = 4`):
   - **smp-test2**: one worker per core, every beat read from mhartid on its
