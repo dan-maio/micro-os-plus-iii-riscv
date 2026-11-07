@@ -72,6 +72,31 @@ function (board_test_ncpu _app _out)
   set (${_out} "${UOS_BOARD_NCPU}" PARENT_SCOPE)
 endfunction ()
 
+# -----------------------------------------------------------------------------
+# emmc-fs-test: FatFs (Chan, 0.13.1, copied from the xPack the kernel
+# harness uses) -- its core only, in emmc-fs-test/fatfs/ (ff.c, ffunicode.c,
+# the headers; ffconf.h without the xPack's FF_FS_POSIX_INTEGRATION). The
+# test brings the disk layer (the eMMC area) and get_fattime().
+set (_vf2_fatfs_tests emmc-fs-test)
+set (_vf2_fatfs_dir "${CMAKE_CURRENT_LIST_DIR}/emmc-fs-test/fatfs")
+
+function (board_test_sources _app _out)
+  if ("${_app}" IN_LIST _vf2_fatfs_tests)
+    set (${_out} "${_vf2_fatfs_dir}/source/ff.c" "${_vf2_fatfs_dir}/source/ffunicode.c"
+         PARENT_SCOPE)
+  else ()
+    set (${_out} "" PARENT_SCOPE)
+  endif ()
+endfunction ()
+
+function (board_test_includes _app _out)
+  if ("${_app}" IN_LIST _vf2_fatfs_tests)
+    set (${_out} "${_vf2_fatfs_dir}/include" PARENT_SCOPE)
+  else ()
+    set (${_out} "" PARENT_SCOPE)
+  endif ()
+endfunction ()
+
 function (board_test_defines _app _out)
   if ("${_app}" IN_LIST _vf2_no_autostart)
     set (${_out} "" PARENT_SCOPE)

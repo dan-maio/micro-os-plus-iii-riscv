@@ -496,6 +496,23 @@ only and printed "no FPU, nothing to test" here and on the Duo): f0-f31
 ticks, and on SMP at least one round must resume on another core --
 3894 rounds, 0 bad, 860 migrated.
 
+eMMC (2026-11-07): `test/boards/visionfive2-lite/src/emmc.cpp` drives the
+JH-7110's SDIO0, a Synopsys DesignWare MMC host at `0x16010000`, polled:
+1-bit, 399 kHz for identification and 24.75 MHz after (CLKDIV 248 / 4 of a
+198 MHz controller clock = PLL2 1188 MHz / 3 / 2, read from the PLL
+registers), sector addressing, the controller's FIFO at `0x200` and **32
+bits wide** (HCON H_DATA_WIDTH 1; read 64 bits at a time it returned
+garbage). Register map and sequences: Linux `dw_mmc.h/.c`. U-Boot leaves
+the controller unused (PWREN/CLKENA 0). About 2.9 MB/s both ways.
+
+| | |
+|---|---|
+| card | Samsung (MID `0xEC`) "A31M8C", EXT_CSD rev 8, 122142720 sectors (58.24 GiB) |
+| GPT | 1 u-boot-spl (4096..8191), 2 u-boot (8192..16383), 3 EFI System vfat (16384..221183), 4 Linux root (221184..109928447, to 52.42 GiB) |
+| test area | after the highest partition, before the backup GPT minus 1 MiB: LBA 109928448..122138623 = 5962 MiB (`test/visionfive2-lite/include/emmc-area.hpp`). The space from 40 GiB is **not** free: the Linux root reaches 52.42 GiB |
+| emmc-probe | read only (its image has no `emmc::write`): card, GPT, partitions, the area -- PASS |
+| emmc-fs-test | FatFs 0.13.1 (core copied from the harness xPack, `emmc-fs-test/fatfs/`, without the xPack's `FF_FS_POSIX_INTEGRATION`) on the area, FAT32, 32 KiB clusters; the disk layer refuses any sector outside it; formats only when no filesystem is there; `RUNS.TXT` counts the runs; text, 64 KiB and 1 MiB files written, read back, listed, deleted, re-read after a remount; both GPT copies, partitions 1-2, the first 4 MiB of the vfat partition and the first and last MiB of the Linux root are hashed before and after: unchanged. Runs 1 (formatted), 2 and 3 (harness) PASS, hash `02a3425c229d9a83` every time. The partition table is not written: Linux does not see this filesystem |
+
 Before (2026-11-06, DAPLink, 11/11 PASS):
 - SMP on the four U74 (`OS_NCPU = 4`):
   - **smp-test2**: one worker per core, every beat read from mhartid on its
