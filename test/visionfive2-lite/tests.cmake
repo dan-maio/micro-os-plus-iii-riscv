@@ -85,6 +85,8 @@ set (_vf2_fatfs_dir "${CMAKE_CURRENT_LIST_DIR}/emmc-fs-test/fatfs")
 # on the include path.
 set (_vf2_usb_cdc_tests smp-test-usb-cdc-acm)
 set (_vf2_usb_cdc_raw_tests smp-test-usb-cdc-file)
+# USB file round trip through a FAT file on the eMMC: USB + FatFs.
+set (_vf2_usb_fs_tests smp-test-usb-cdc-file-fs)
 
 function (board_test_sources _app _out)
   if ("${_app}" IN_LIST _vf2_fatfs_tests)
@@ -95,6 +97,10 @@ function (board_test_sources _app _out)
          PARENT_SCOPE)
   elseif ("${_app}" IN_LIST _vf2_usb_cdc_raw_tests)
     set (${_out} ${UOS_BOARD_USB_CORE_SOURCES} ${UOS_BOARD_USB_CDC_RAW_SOURCES}
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_usb_fs_tests)
+    set (${_out} ${UOS_BOARD_USB_CORE_SOURCES} ${UOS_BOARD_USB_CDC_RAW_SOURCES}
+         "${_vf2_fatfs_dir}/source/ff.c" "${_vf2_fatfs_dir}/source/ffunicode.c"
          PARENT_SCOPE)
   else ()
     set (${_out} "" PARENT_SCOPE)
@@ -107,6 +113,9 @@ function (board_test_includes _app _out)
   elseif ("${_app}" IN_LIST _vf2_usb_cdc_tests OR "${_app}" IN_LIST _vf2_usb_cdc_raw_tests)
     set (${_out} ${UOS_BOARD_USB_CDC_INCLUDE} ${UOS_BOARD_USB_INCLUDE}
          PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_usb_fs_tests)
+    set (${_out} ${UOS_BOARD_USB_CDC_INCLUDE} ${UOS_BOARD_USB_INCLUDE}
+         "${_vf2_fatfs_dir}/include" PARENT_SCOPE)
   else ()
     set (${_out} "" PARENT_SCOPE)
   endif ()
