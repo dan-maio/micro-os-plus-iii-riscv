@@ -9,9 +9,8 @@
 # (MounRiver) OpenOCD.
 #
 # No CLINT and no machine timer/software interrupt: interrupts go through
-# the PFIC. Until the port has its PFIC path, the board builds only the
-# kernel-free tests (riscv-board.hpp). No QEMU image: QEMU does not model
-# the CH32V307 or the PFIC.
+# the PFIC, and the port runs its PFIC path (RISCV_PFIC). No QEMU image:
+# QEMU does not model the CH32V307 or the PFIC.
 # -----------------------------------------------------------------------------
 
 set (UOS_BOARD_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}")
@@ -27,6 +26,10 @@ set (UOS_BOARD_LINKER_HW "${UOS_BOARD_SRC_DIR}/linker.ld")
 
 set (UOS_BOARD_LIBS "")
 
+# RISCV_PFIC: the port's QingKe PFIC path (include/pfic.hpp): the software
+# interrupt as PendSV, SysTick as the tick, the PFIC threshold as BASEPRI,
+# nested interrupts.
 set (UOS_BOARD_DEFINES
+     RISCV_PFIC
      SEMIHOST_TRAP_CHOSEN
      "PORT_GREETING=\"µOS++ WCH CH32V307V-EVT (QingKe V4F RV32)\"")

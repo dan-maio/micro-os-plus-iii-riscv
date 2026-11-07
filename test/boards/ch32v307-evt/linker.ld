@@ -69,6 +69,11 @@ SECTIONS
     KEEP(*(.eh_frame))
   } > FLASH
 
+  .gcc_except_table : ALIGN(4)
+  {
+    *(.gcc_except_table .gcc_except_table.*)
+  } > FLASH
+
   .data : ALIGN(16)
   {
     __data_start = .;

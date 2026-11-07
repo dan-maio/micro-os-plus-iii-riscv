@@ -26,6 +26,9 @@
 #include <riscv-csr.hpp>
 #include <riscv-hart.hpp>
 #include <semihosting.hpp>
+#if defined(RISCV_PFIC)
+#include <pfic.hpp>
+#endif
 
 extern "C"
 {
@@ -45,6 +48,16 @@ extern "C"
   void __attribute__ ((weak)) riscv_board_external_interrupt (void)
   {
   }
+
+#if defined(RISCV_PFIC)
+  // A PFIC peripheral interrupt (16 and up). The board's handlers; one the
+  // board does not handle is disabled, so it cannot trap again forever.
+  bool __attribute__ ((weak)) riscv_board_pfic_interrupt (unsigned irq)
+  {
+    (void) irq;
+    return false;
+  }
+#endif
 
   // An exception a test (or an application) wants to handle itself: return
   // true after adjusting the frame (typically frame->x[0], mepc, past the
@@ -197,6 +210,38 @@ void*
 riscv_trap_dispatch (ctx_t* frame)
 {
   const std::uint64_t mcause = RISCV_CSR_READ (mcause);
+
+#if defined(RISCV_PFIC)
+  // The QingKe PFIC: mcause holds the PFIC interrupt number. Interrupts
+  // nest (a more urgent one preempts this dispatcher); only the software
+  // interrupt -- the lowest priority, so it runs when no other interrupt
+  // is active -- switches threads.
+  if (mcause & riscv::csr::MCAUSE_INTERRUPT)
+    {
+      const unsigned irq = static_cast<unsigned> (mcause & 0xFFF);
+      if (irq == pfic::IRQ_SYSTICK)
+        {
+          pfic::reg32 (pfic::STK_SR) = 0u; // CNTIF, write 0 to clear
+          riscv_port_tick ();
+          return frame;
+        }
+      if (irq == pfic::IRQ_SWI)
+        {
+          if (riscv_trap_nesting[0] == 1 && riscv_port_switch_due ())
+            {
+              return os::rtos::port::scheduler::switch_stacks (
+                  reinterpret_cast<os::rtos::port::stack::element_t*> (frame));
+            }
+          return frame;
+        }
+      if (!riscv_board_pfic_interrupt (irq))
+        {
+          pfic::disable (irq);
+          fault (frame, mcause);
+        }
+      return frame;
+    }
+#endif
 
   if (mcause & riscv::csr::MCAUSE_INTERRUPT)
     {

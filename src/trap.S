@@ -13,6 +13,11 @@
  * nest; only an exception inside a handler can (nesting 2), and such a trap
  * never switches. riscv_trap_nesting is what in_handler_mode() reads.
  *
+ * On a QingKe PFIC board (RISCV_PFIC) the hardware nests interrupts and
+ * leaves MIE set: a more urgent interrupt can preempt this code anywhere,
+ * on the same stack (it saves below sp). The nesting count is then the
+ * interrupt depth, and only the software interrupt switches threads.
+ *
  * Copyright (c) 2026 Dan. MIT license.
  */
 
@@ -135,7 +140,16 @@ riscv_trap_entry:
 	call	riscv_trap_dispatch
 
 	/* a0 = the frame to resume (another thread's after a switch). The
-	 * trap returns on the hart it was taken on. */
+	 * trap returns on the hart it was taken on.
+	 *
+	 * sp moves to the frame BEFORE the nesting count drops: where
+	 * interrupts nest in hardware (the QingKe PFIC, mstatus.MIE stays set
+	 * in a trap), an interrupt taken between the two would otherwise see
+	 * nesting 0 while sp is still on the interrupt stack, build its frame
+	 * near the top and then reset sp to that top for its dispatcher --
+	 * over its own frame. With sp on the frame first, it builds below the
+	 * frame on the thread's stack, as any first-level trap does. */
+	mv	sp, a0
 #if defined(OS_NCPU) && (OS_NCPU > 1)
 	csrr	t4, mhartid
 	addi	t4, t4, -RISCV_HART_BASE
@@ -148,7 +162,6 @@ riscv_trap_entry:
 	lw	t1, 0(t0)
 	addi	t1, t1, -1
 	sw	t1, 0(t0)
-	mv	sp, a0
 
 	.globl	riscv_trap_restore
 riscv_trap_restore:

@@ -22,6 +22,9 @@
 #include <cmsis-plus/rtos/os.h>
 
 #include <clint.hpp>
+#if defined(RISCV_PFIC)
+#include <pfic.hpp>
+#endif
 #include <riscv-board.hpp>
 
 extern "C"
@@ -86,7 +89,19 @@ void
 os_startup_initialize_hardware_early (void)
 {
   clint::timer_disarm ();
+#if defined(RISCV_PFIC)
+  // No MSIP on a QingKe board (CLINT_MSIP is not a register there: a store
+  // to it hit flash address 0 and trapped, mcause 3 -- measured). Every
+  // PFIC interrupt off and nothing pending instead; the port enables the
+  // two it uses.
+  for (unsigned i = 0; i < 8; ++i)
+    {
+      pfic::reg32 (pfic::IRER0 + 4u * i) = 0xFFFFFFFFu;
+      pfic::reg32 (pfic::IPRR0 + 4u * i) = 0xFFFFFFFFu;
+    }
+#else
   clint::msip_clear ();
+#endif
   riscv_board_initialize_early ();
 }
 

@@ -15,9 +15,10 @@ Fourth board: **StarFive VisionFive 2 Lite** (JH-7110S, four SiFive U74
 RV64GC harts + one S7 monitor hart), µOS++ SMP on the four U74 in M-mode
 (mhartid 1..4 = CPUs 0..3), every test loaded into and run from DDR -- see
 *StarFive VisionFive 2 Lite*. Fifth board: **WCH CH32V307V-EVT-R1**
-(CH32V307, one QingKe V4F core, RV32IMAFC, single-precision FPU) -- brought
-up without the kernel so far; the kernel waits for the port's PFIC path (the
-chip has no CLINT); see *WCH CH32V307V-EVT-R1*.
+(CH32V307, one QingKe V4F core, RV32IMAFC, single-precision FPU): no CLINT,
+so the port runs its **PFIC path** there -- the PFIC software interrupt as
+PendSV, SysTick as the tick, the PFIC threshold as BASEPRI, nested
+interrupts; see *WCH CH32V307V-EVT-R1*.
 
 ## Layout
 
@@ -32,6 +33,7 @@ micro-os-plu-iii-smp-riscv-pr-github/       the workspace
     │   ├── cmsis-plus/rtos/port/           os-c-decls.h, os-decls.h, os-inlines.h
     │   ├── port_ctx.hpp                    the trap frame (528 bytes)
     │   ├── riscv-csr.hpp, clint.hpp, mmu.hpp, semihosting.hpp
+    │   ├── pfic.hpp                        the QingKe PFIC (RISCV_PFIC boards)
     │   └── cmsis_device.h, riscv-eabi-compat.h
     ├── src/
     │   ├── startup.S, startup.cpp          reset entry, start-up hooks, init arrays
@@ -57,7 +59,7 @@ micro-os-plu-iii-smp-riscv-pr-github/       the workspace
         │                                   jh7110_daplink.cfg, hw.sh,
         │                                   include/ (multicore.hpp), src/
         ├── boards/ch32v307-evt/            board.cmake, linker.ld (flash), hw.sh,
-        │                                   openocd-wch-wlinke-0x12.patch,
+        │                                   openocd-wch/ (build script, patches),
         │                                   include/ (ch32v307.hpp), src/
         ├── milkv-duo/, pico2/,             one directory per test application
         ├── pico2-rp2350b-psram/
@@ -370,13 +372,19 @@ plugged in.
 
 CH32V307VCT6: one WCH **QingKe V4F** core, RV32IMAFC (single-precision
 FPU), on WCH's evaluation board, with its on-board **WCH-LinkE**
-(`1a86:8010`) for debug and console. Bring-up stage: the board, its
-start-up, clocks, console, LED and key work, and the kernel-free test
-`board-basics` passes from flash. **The kernel does not run here yet**:
-the chip has no CLINT, so the port needs its PFIC path first (see *Interrupts*
-below). Build: `cmake -S . -B test/build-ch32v307 -G Ninja -D
-BOARD=ch32v307-evt -D CMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-none-elf.cmake`;
-hardware images only (QEMU models neither the chip nor the PFIC).
+(`1a86:8010`) for debug and console. The chip has no CLINT, so the port runs
+its **PFIC path** here (`RISCV_PFIC`, *Interrupts* below): the kernel
+runs, preemptive, with nested interrupts, close to the Cortex-M port.
+Images run from flash. Build: `cmake -S . -B test/build-ch32v307 -G Ninja
+-D BOARD=ch32v307-evt -D
+CMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-none-elf.cmake`; hardware
+images only (QEMU models neither the chip nor the PFIC). Run:
+`test/boards/ch32v307-evt/hw.sh <app>`.
+
+Tests (`test/ch32v307-evt/`): `board-basics` (kernel-free: start-up,
+clocks, console, LED, key, semihosting) and `smp-test1` (the kernel: three
+threads, sleeps, a mutex, a counting semaphore, the LED -- the Pico 2's
+single-core bring-up).
 
 | | |
 |---|---|
@@ -385,51 +393,96 @@ hardware images only (QEMU models neither the chip nor the PFIC).
 | CSRs (measured) | a probe run from SRAM read and wrote each one: `mie`, `mip` read 0 and take writes; `mhartid` 0; **`mcycle`, `cycle`, `time` read 0** -- no CSR time base; vendor `gintenr` 0x800, `intsyscr` 0x804, `corecfgr` 0xBC0 present. `fence.i` is documented |
 | flags | `-march=rv32imafc_zicsr_zifencei -mabi=ilp32f -mcmodel=medany` (multilib `rv32imafc_zicsr_zaamo_zalrsc/ilp32f`) |
 | memory | as configured: **256 KiB code flash + 64 KiB SRAM** -- `FLASH_OBR = 0x03fffefc`, `SRAM_CODE_MODE` bits [9:8] = `10` ("CODE-256KB + RAM-64KB"), and the WCH OpenOCD reports the same. `ESIG_FLACAP` reads 288 KiB: the whole flash, not the split. `linker.ld`: code at the flash's `0x00000000` alias (where the core starts), `.data` copied from flash, 2 KiB IRQ + 2 KiB boot stack |
-| start-up | `startup.S` unchanged (its `csrw mie, zero` is harmless here); `riscv_board_initialize_early()` writes `corecfgr = 0x1f` (WCH's start-up value), the clocks, and starts SysTick free-running |
+| start-up | `startup.S` unchanged (its `csrw mie, zero` is harmless here); under `RISCV_PFIC` `startup.cpp` disables and clears every PFIC interrupt instead of clearing the CLINT MSIP (a store there hit flash address 0 and trapped, `mcause` 3 -- measured); `riscv_board_initialize_early()` writes `corecfgr = 0x1f` (WCH's start-up value), the clocks, and starts SysTick free-running |
 | clocks | WCH's own `SystemInit()` + `SetSysClockTo144_HSE()`, register for register: HSE 8 MHz, PLL x18 (the D8C encoding, `PLLMUL = 0000`), **144 MHz** HCLK = PCLK2, PCLK1 72 MHz. Measured against the host's wall clock (semihosting `SYS_TIME`, SysTick ticks between two second edges 9 s apart), three runs: **144.35**, **142.68** and **144.27 MHz** (+0.24, -0.9, +0.19 %) -- within the error of catching the edges through semihosting round trips over the WCH-Link; the readable UART at 115200 is the other check |
-| time base | SysTick (`0xE000F000`), 64-bit, counting up at HCLK; `ch32::systick_now()` |
+| time base | SysTick (`0xE000F000`), 64-bit, counting up at HCLK; `ch32::systick_now()`. For the kernel it is the tick: `riscv-board.hpp` maps `CLINT_MTIME` to its counter (`STK_CNTL/H`) and `CLINT_MTIMECMP` to its compare (`STK_CMPLR/HR`), so the port's mtime/mtimecmp code (catch-up, guard) drives it unchanged |
 | console | USART1, **PA9 TX / PA10 RX**, 115200 8N1 (`BRR = 1250`), through the EVT's J2 jumpers to the WCH-LinkE's CDC port (`/dev/ttyACM0`) |
 | LED | **LED1 on PD0** by a jumper wire (the EVT's LEDs are not connected to the chip in its layout -- Zephyr's board page), active low |
 | key | **S2 on PA1** by a jumper wire: like the LEDs, S2 reaches the chip only through the **J3** header (WCH *Evaluation Board Reference* V1.9: "USER button S2: Connect the I/O port of the main MCU through J3 pin"); PA1 is Zephyr's choice. Active low (S2 to GND), input with the internal pull-up |
 | USB | planned: the high-speed port P6 (PB6/PB7), TinyUSB's WCH USBHS driver |
 
-### Interrupts: the PFIC, and what the port needs
+### Interrupts: the PFIC path (RISCV_PFIC, include/pfic.hpp)
 
 The QingKe V4F has no `mtime`/`mtimecmp` and no machine timer or software
 interrupt: everything goes through the **PFIC** at `0xE000E000` (SysTick =
-interrupt 12, software interrupt = 14, peripherals from 16). `mstatus.MIE` is
-**not** cleared on a trap -- the core is built for nesting -- while the
-port's `trap.S` assumes it is. With `INTSYSCR = 0` (reset: no nesting) the
-generic trap entry is safe, and the kernel-free tests use it. The plan for
-the kernel, close to the Cortex-M port: PFIC nesting on, the software
-interrupt 14 as PendSV at the lowest priority, `PFIC_ITHRESDR` as BASEPRI,
-SysTick as the tick.
+interrupt 12, software interrupt = 14, peripherals from 16), which has
+priorities and **hardware nesting** -- `mstatus.MIE` is **not** cleared on a
+trap. Measured first (an SRAM probe, `INTSYSCR = 0x0a`, HPE off, IRQ 14 at
+priority 0xC0, IRQ 12 at 0x00, both pended through `PFIC_IPSR`): IRQ 12
+preempted IRQ 14 three instructions into its handler (`PFIC_GISR = 0x103`:
+nesting level 2), and after it returned the low handler's **`mepc`,
+`mcause` and `mstatus` were intact**. So the port uses the Cortex-M model,
+board-selected by the define `RISCV_PFIC` (the other boards are unchanged):
 
-Measured first (an SRAM probe, nesting on with `INTSYSCR = 0x0a`, HPE off,
-IRQ 14 at priority 0xC0, IRQ 12 at 0x00, both pended through `PFIC_IPSR`):
-IRQ 12 preempted IRQ 14 three instructions into its handler (`PFIC_GISR =
-0x103`: nesting level 2), and after it returned the low handler's **`mepc`,
-`mcause` and `mstatus` were intact** (`mepc` exactly the main-line
-instruction it had interrupted). The hardware keeps them per nesting level,
-so the Cortex-M-like design is safe.
+| Cortex-M | CH32V307 (PFIC) |
+|---|---|
+| PendSV, lowest priority | the software interrupt **14**, priority `0xC0`: the **only** place threads switch. It runs when no other interrupt is active, so a switch never leaves another interrupt half-done in the PFIC's active state (an interrupt that switched threads before an outer one's `mret` would keep that one -- and everything at or below its priority -- blocked until its thread came back) |
+| SysTick | the QingKe SysTick, interrupt **12**, priority `0x80`, through the port's mtime/mtimecmp code (64-bit compare, catch-up, guard) |
+| BASEPRI | `PFIC_ITHRESDR`: an interrupt with priority value >= the threshold stays pending, 0 = none. A critical section raises it to **`0x40`**; the `0x00` group keeps running and must not call the kernel |
+| PendSV request + DSB/ISB | `reschedule()` pends 14 and, from a thread that 14 can interrupt now, waits until `PFIC_IPR0` shows it taken -- precise: the thread does not run on past its request. In a handler or a critical section it is taken when the handlers return / the threshold drops (`critical_section::exit()` waits for it too) |
+| nesting | `INTSYSCR = 0x0a`: INESTEN, PMTCFG `10` (4 levels, priority bits [7:6]), HPE off |
+| IPSR != 0 | `riscv_trap_nesting != 0` (the interrupt depth) |
 
-### OpenOCD and the WCH-LinkE (hw.sh)
+Priorities: `0x00` zero-latency (never masked), `0x40` kernel-aware,
+`0x80` SysTick, `0xC0` the switch. The full frame is saved by the shared
+`trap.S`; a nested interrupt saves its own below the current `sp`. One race
+in `trap.S` mattered only here and is fixed for every board: on the way out
+`sp` now moves to the frame **before** the nesting count drops -- otherwise
+an interrupt in between saw nesting 0 while `sp` was still on the interrupt
+stack, built its frame near the top and then reset `sp` to that top for its
+dispatcher, over its own frame. A peripheral interrupt (16+) goes to the
+board's `riscv_board_pfic_interrupt(irq)`; one it does not handle is
+disabled and reported as a fault. `soft-irq.cpp` (CLINT MSIP lines)
+compiles out; the board's `NVIC_*` on PFIC interrupts are still to come
+(the CMSIS validator needs them).
 
-`hw.sh <app>` programs the image into flash and runs it: `flash
-write_image erase <elf>` (the WCH flash bank is at `0x00000000`; the erase
-is the whole chip), then the flash is read back with `dump_image` and
-compared with the image's bytes on the PC, then `reset halt`, `arm
-semihosting enable`, `resume`; OpenOCD ends on the test's semihosting exit
-with its code. Default OpenOCD `~/.local/openocd-wch/bin/openocd`; set
-`OPENOCD=` for another.
+### OpenOCD for the WCH-LinkE (openocd-wch/, hw.sh)
+
+The upstream OpenOCD does not know the WCH-LinkE's protocol; WCH's own
+(MounRiver) fork does. The one used here:
 
 | | |
 |---|---|
-| OpenOCD | the WCH (MounRiver) fork **mrs-wch-riscv-221010** (0.11.0+dev), built from source with the GCC 16 fixes, plus **one patch** (`openocd-wch-wlinke-0x12.patch`): this WCH-LinkE (firmware 2.10) reports probe type **`0x12`** (measured: reply `82 0d 04 02 0a 12 00` to the identify command), which 221010 rejects ("unknow WCH-LINK"); the newer `mrs-wch-riscv-230824` treats `0x12` as the LinkE, and so does the patch. The driver detects the chip family as 6 (CH32V30x), 256-byte pages. Installed as `~/.local/openocd-wch/bin/openocd` (the unpatched binary kept beside it as `openocd.221010-unpatched`) |
-| RAM loads | in WCH mode every memory write **below `0x20000000`** is taken as flash data and copied into a 256-byte buffer **without a bounds check** (`riscv-013.c`, `write_flash_data`; found with AddressSanitizer). An ELF whose first segment starts below SRAM (the linker's default page-aligned headers at `0x1ffff000`) crashed OpenOCD in libusb. Link SRAM images with `-n`; program flash only through `flash write_image` |
-| `verify_image` | fails silently (its checksum runs in the work area, and `target/wch-riscv.cfg`'s `0x80000000` is not RAM on this chip): hw.sh compares a `dump_image` instead |
-| semihosting | works (`arm semihosting enable`, text and `SYS_EXIT`). `SYS_CLOCK` returns OpenOCD's own CPU time (`clock()`), not wall time; `SYS_TIME` is wall time in seconds |
-| the demo's UART | after any debug session that halts WCH's factory demo, its UART showed garbage until a power cycle: with HSE off its clock is HSI x15 = 120 MHz while its `BRR` (1111) is right only for 128 MHz -- about 108 000 baud. The tests set their own clock and baud |
+| source | [karlp/openocd-hacks](https://github.com/karlp/openocd-hacks), branch `mrs-wch-riscv-221010`, commit `266d7c8d3` -- the MounRiver fork (0.11.0+dev) with its `interface/wlink.cfg` and `target/wch-riscv.cfg` |
+| patch 1 | `openocd-wch/gcc16-werror-fixes.patch` (notes: `gcc16-werror-fixes.md`): the fork builds with `-Werror`, and GCC 16 stops it in the WCH drivers (`wlink.c`, `wchriscv.c`, ...), the RISC-V target and a few upstream files; source-level fixes only, `-Werror` stays on |
+| patch 2 | `openocd-wch/wlinke-type-0x12.patch`: this WCH-LinkE (firmware 2.10) answers the identify command with probe type **`0x12`** (measured: reply `82 0d 04 02 0a 12 00`), which 221010 rejects ("unknow WCH-LINK"). The newer fork `mrs-wch-riscv-230824` treats `0x12` as the LinkE; the patch does the same (one `case` line: it only names the probe) |
+| build + install | `test/boards/ch32v307-evt/openocd-wch/build-openocd-wch.sh [<src>] [<prefix>]`: clones/checks out the commit, applies both patches (once), `./configure --prefix=<prefix> --enable-wlink`, `make`, `make install`. Default prefix `~/.local/openocd-wch` (an existing `bin/openocd` is kept as `openocd.prev`). Installed here: `~/.local/openocd-wch/bin/openocd`, the unpatched binary kept as `openocd.221010-unpatched` |
+| what it finds | `WCH-LinkE-CH32V307 mod:RV version 2.10`; RISC-V debug over the LinkE's two-wire SDI (OpenOCD prints a JTAG tap `0x00000001`: the fork fakes one); chip family 6 (CH32V30x), 256-byte flash pages; `ROM 256 kbytes RAM 64 kbytes`; flash bank `wch_riscv` at `0x00000000` |
+
+**hw.sh** (`test/boards/ch32v307-evt/hw.sh <app> [seconds]`): `flash
+write_image erase <elf>` (the WCH driver erases the **whole chip**), the
+flash read back with `dump_image` and compared on the PC with `objcopy -O
+binary` of the ELF (`FLASH READBACK DIFFERS` = exit 6), then a second session
+`reset halt`, `arm semihosting enable`, `resume`. OpenOCD ends itself on the
+test's semihosting `SYS_EXIT`, with its code: exit 0 PASS, 1 FAIL, 3
+TIMEOUT, 4 OPENOCD DIED, 5 NO EXIT. Env: `BUILD=` (default
+`test/build-ch32v307`), `OPENOCD=` (default the installed one),
+`OPENOCD_SCRIPTS=`.
+
+By hand -- the scripts are found by the installed binary itself:
+
+```bash
+O=~/.local/openocd-wch/bin/openocd
+# connect, read where the core is, let it run on (read-only)
+$O -f interface/wlink.cfg -f target/wch-riscv.cfg -c init -c halt \
+   -c "reg pc" -c "reg mcause" -c "reg mepc" -c "mdw 0xE000E04C" -c resume -c shutdown
+# program and start an image
+$O -f interface/wlink.cfg -f target/wch-riscv.cfg -c init -c "reset halt" \
+   -c "flash write_image erase app.elf" -c "reset run" -c shutdown
+# a program in SRAM (linked at 0x20000000 with -Wl,-n), with semihosting
+$O -f interface/wlink.cfg -f target/wch-riscv.cfg -c init -c "reset halt" \
+   -c "arm semihosting enable" -c "load_image app.elf" -c "reg pc 0x20000000" -c resume
+```
+
+What this OpenOCD does wrong (all measured; hw.sh avoids each):
+
+| | |
+|---|---|
+| RAM loads below SRAM | in WCH mode every memory write **below `0x20000000`** is taken as flash data and copied into a 256-byte buffer **without a bounds check** (`riscv-013.c`, `write_flash_data`; found with AddressSanitizer). An ELF whose first segment starts below SRAM -- the linker's default page-aligned headers, `0x1ffff000` for a `-Ttext=0x20000000` link -- crashed OpenOCD (in libusb, from the corrupted heap). Link SRAM images with `-Wl,-n`; write flash only through `flash write_image` |
+| `verify_image` | fails silently: its checksum runs in the work area, and `target/wch-riscv.cfg`'s `0x80000000` is not RAM on this chip. Compare a `dump_image` instead |
+| `SYS_CLOCK` | returns OpenOCD's own CPU time (`clock()`), not wall time. `SYS_TIME` is wall time (seconds) -- board-basics measures HCLK against it |
+| flash bank | at `0x00000000` (not `0x08000000`), where the image is linked |
+| the factory demo's UART | after a debug session halted WCH's demo, its UART showed garbage until a power cycle: its clock read HSI x15 = 120 MHz while its `BRR` (1111) fits 128 MHz -- about 108 000 baud. The tests set their own clock and baud |
 
 ## Build and test
 
@@ -556,8 +609,12 @@ runs), USART1 115200, LED1 on PD0, key S2 on PA1, semihosting console and
 exit; the flash read back identical (3 runs, all PASS). The key: 0 presses
 in the first two runs -- S2 was not wired (it reaches the chip only through
 J3); with the J3 KEY -> PA1 jumper, **7 presses counted** in the 10 s
-window, released at rest. Installed OpenOCD (patched) used by hw.sh. No kernel test yet (the PFIC path comes first).
+window, released at rest. Installed OpenOCD (patched) used by hw.sh.
 
+The kernel on the CH32V307 (PFIC path, 2026-11-07): **smp-test1 PASS** from
+flash -- three threads switched by the PFIC software interrupt, 1 ms SysTick
+ticks through the mtime/mtimecmp code, sleeps, a mutex and a counting
+semaphore under threshold critical sections, the semihosting exit.
 
 StarFive VisionFive 2 Lite, JTAG probe on Pico at 10 MHz, full console over
 semihosting, every test in DDR, **every test on all four U74**: **11/11

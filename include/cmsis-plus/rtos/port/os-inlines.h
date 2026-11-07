@@ -14,6 +14,11 @@
  * value in one instruction, so enter() is atomic with respect to interrupts
  * without a read-modify-write window. "In handler mode" is the trap nesting
  * count kept by the trap entry, because RISC-V has no IPSR equivalent.
+ *
+ * On a WCH QingKe board (RISCV_PFIC, include/pfic.hpp) the critical section
+ * is the PFIC threshold instead -- BASEPRI: interrupts of the priority-0x00
+ * group keep running -- and a thread's switch request is the software
+ * interrupt, taken as soon as the threshold allows it.
  */
 
 #ifndef CMSIS_PLUS_RTOS_PORT_OS_INLINES_H_
@@ -32,6 +37,12 @@
 #include <riscv-hart.hpp>
 #include <riscv-board.hpp>
 #include <clint.hpp>
+#if defined(RISCV_PFIC)
+#include <pfic.hpp>
+#if defined(OS_USE_SMP_SCHEDULER)
+#error "RISCV_PFIC: the QingKe PFIC path is single-hart"
+#endif
+#endif
 
 extern "C"
 {
@@ -62,7 +73,11 @@ namespace os
           // PORT_GREETING names the board; board.cmake defines it.
           trace::printf ("Scheduler: " PORT_GREETING
                          ", RV%u M-mode, %u hart%s, preemptive, %u Hz tick, "
+#if defined(RISCV_PFIC)
+                         "PFIC SWI switch, nesting\n",
+#else
                          "ecall switch\n",
+#endif
                          static_cast<unsigned> (riscv::XLEN),
                          static_cast<unsigned> (OS_NCPU),
                          (OS_NCPU > 1) ? "s (SMP)" : "",
@@ -132,6 +147,54 @@ namespace os
         // masks this hart, and the recursive kernel spinlock keeps the other
         // hart(s) out of the kernel's data, as SIO spinlock 0 does in the
         // RP2350 Cortex-M port.
+#if defined(RISCV_PFIC)
+        // BASEPRI: raise the PFIC threshold to the kernel's level (never
+        // lower it -- a section inside a more restrictive one keeps that
+        // one's); return the threshold to restore. An interrupt that comes
+        // between the read and the write restores what it changes.
+        inline rtos::interrupts::state_t __attribute__ ((always_inline))
+        critical_section::enter (void)
+        {
+          const std::uint32_t t = pfic::threshold ();
+          if (t == 0u || t > pfic::KERNEL_THRESHOLD)
+            {
+              pfic::set_threshold (pfic::KERNEL_THRESHOLD);
+            }
+          return t;
+        }
+
+        // Restore the threshold. A switch asked for inside the section is a
+        // pending software interrupt, taken as soon as the threshold lets
+        // it; a thread waits for it here, so it does not run on past the
+        // section before it is switched out (what DSB/ISB after the BASEPRI
+        // write do on Cortex-M).
+        inline void __attribute__ ((always_inline))
+        critical_section::exit (rtos::interrupts::state_t state)
+        {
+          pfic::set_threshold (static_cast<std::uint32_t> (state));
+          if (state == 0u && !riscv::in_trap ()
+              && (RISCV_CSR_READ (mstatus) & riscv::csr::MSTATUS_MIE) != 0)
+            {
+              while (pfic::is_pending (pfic::IRQ_SWI))
+                {
+                }
+            }
+        }
+
+        inline rtos::interrupts::state_t __attribute__ ((always_inline))
+        uncritical_section::enter (void)
+        {
+          const std::uint32_t t = pfic::threshold ();
+          pfic::set_threshold (0u);
+          return t;
+        }
+
+        inline void __attribute__ ((always_inline))
+        uncritical_section::exit (rtos::interrupts::state_t state)
+        {
+          pfic::set_threshold (static_cast<std::uint32_t> (state));
+        }
+#else
         inline rtos::interrupts::state_t __attribute__ ((always_inline))
         critical_section::enter (void)
         {
@@ -178,6 +241,7 @@ namespace os
               riscv::csr::mstatus_clear_mie ();
             }
         }
+#endif
       } /* namespace interrupts */
 
       namespace this_thread

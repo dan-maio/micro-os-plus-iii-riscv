@@ -33,6 +33,13 @@
  *   frame         full frame built by trap.S (port_ctx.hpp)
  *   IPSR != 0     riscv_trap_nesting != 0
  *
+ * A WCH QingKe board (RISCV_PFIC, include/pfic.hpp) is the Cortex-M model
+ * itself: the PFIC software interrupt (14, lowest priority) is PendSV and
+ * the only place threads switch; a thread asks for it and waits until it
+ * has been taken (precise, as a Cortex-M thread is after DSB/ISB); the
+ * QingKe SysTick (12) is the tick, through the same mtime/mtimecmp code;
+ * the PFIC threshold is BASEPRI (os-inlines.h). Interrupts nest.
+ *
  * Copyright (c) Liviu Ionescu (upstream Cortex-M port, structure).
  * Copyright (c) 2026 Dan. MIT license.
  */
@@ -49,6 +56,9 @@
 #include <riscv-amo.hpp>
 #include <riscv-board.hpp>
 #include <riscv-csr.hpp>
+#if defined(RISCV_PFIC)
+#include <pfic.hpp>
+#endif
 
 #if !defined(OS_NCPU)
 #define OS_NCPU 1
@@ -143,6 +153,30 @@ namespace
 // execute one more instruction before trap.cpp has saved it and resumed the
 // next thread. It continues after the ecall only when switched back in.
 // All registers are saved and restored by trap.S; nothing is clobbered.
+#if defined(RISCV_PFIC)
+// The PendSV way: pend the software interrupt. From a thread that it can
+// interrupt now (MIE set, the threshold not masking it), wait until it has
+// been taken -- the PFIC takes a pended interrupt a few instructions after
+// the store (measured), and the thread must not run on past its request.
+// Otherwise (in a handler, in a critical section) it is taken when the
+// handlers have returned / the threshold is lowered.
+void
+riscv_port_yield (void)
+{
+  pfic::set_pending (pfic::IRQ_SWI);
+  __asm__ volatile("fence.i" ::: "memory");
+  const std::uint32_t t = pfic::threshold ();
+  if (riscv::in_trap ()
+      || (RISCV_CSR_READ (mstatus) & riscv::csr::MSTATUS_MIE) == 0
+      || (t != 0u && pfic::PRIO_SWI >= t))
+    {
+      return;
+    }
+  while (pfic::is_pending (pfic::IRQ_SWI))
+    {
+    }
+}
+#else
 void
 riscv_port_yield (void)
 {
@@ -150,12 +184,22 @@ riscv_port_yield (void)
   // a7 comes back 0 (trap.cpp consumes the marker).
   __asm__ volatile("ecall" : "+r"(a7) : : "memory");
 }
+#endif
 
 // A switch asked for while it could not happen (MIE clear, or the scheduler
 // locked): do it now, if it can happen now.
 void
 riscv_port_deferred_yield (void)
 {
+#if defined(RISCV_PFIC)
+  if (os::rtos::interrupts::in_handler_mode ()
+      || os::rtos::scheduler::locked ())
+    {
+      return;
+    }
+  riscv_port_yield ();
+  return;
+#endif
   if (os::rtos::interrupts::in_handler_mode ()
       || os::rtos::scheduler::locked ()
       || (RISCV_CSR_READ (mstatus) & riscv::csr::MSTATUS_MIE) == 0)
@@ -194,7 +238,17 @@ namespace
     const unsigned h = riscv::this_hart ();
     next_tick[h] = clint::now ();
     riscv_port_tick_rearm ();
+#if defined(RISCV_PFIC)
+    // The QingKe SysTick counts up from board start-up (STE, HCLK); its
+    // compare (CMPLR/CMPHR, written by tick_write) now raises CNTIF and
+    // interrupt 12.
+    pfic::reg32 (pfic::STK_SR) = 0u;
+    pfic::reg32 (pfic::STK_CTLR) |= pfic::STK_STIE;
+    pfic::set_priority (pfic::IRQ_SYSTICK, pfic::PRIO_SYSTICK);
+    pfic::enable (pfic::IRQ_SYSTICK);
+#else
     RISCV_CSR_SET (mie, riscv::csr::MIE_MTIE);
+#endif
   }
 } // namespace
 
@@ -498,6 +552,20 @@ namespace os
           lock_state = state::init;
 #endif
 
+#if defined(RISCV_PFIC)
+          // Nesting on (4 levels, HPE off), the PendSV and its priority,
+          // no threshold. Then the first switch: the software interrupt,
+          // taken as soon as MIE is set; the boot context is saved into
+          // fake_thread and never resumed.
+          __asm__ volatile("csrw 0x804, %0" ::"r"(pfic::INTSYSCR_NEST4));
+          pfic::set_priority (pfic::IRQ_SWI, pfic::PRIO_SWI);
+          pfic::clear_pending (pfic::IRQ_SWI);
+          pfic::enable (pfic::IRQ_SWI);
+          pfic::set_threshold (0u);
+          riscv_port_pending[0] = true;
+          riscv::csr::mstatus_set_mie ();
+          riscv_port_yield ();
+#else
           // MSIP: the software interrupt lines (soft-irq.cpp) and, on SMP,
           // the cross-hart reschedule request.
           clint::msip_clear ();
@@ -507,6 +575,7 @@ namespace os
           // fake_thread (with MIE clear) and never resumed; the first
           // thread's frame (context::create) enables interrupts on mret.
           riscv_port_yield ();
+#endif
 
           for (;;)
             {
@@ -691,6 +760,28 @@ namespace os
         void
         reschedule (void)
         {
+#if defined(RISCV_PFIC)
+          // Every switch is the software interrupt (riscv_trap_dispatch
+          // switches there when riscv_port_pending is set and the scheduler
+          // is unlocked). Locked: remembered, done at the unlock.
+          if (rtos::scheduler::locked ())
+            {
+              riscv_port_pending[0] = true;
+              return;
+            }
+          if (rtos::interrupts::in_handler_mode ())
+            {
+              if (rtos::scheduler::preemptive ())
+                {
+                  riscv_port_pending[0] = true;
+                  pfic::set_pending (pfic::IRQ_SWI);
+                }
+              return;
+            }
+          riscv_port_pending[0] = true;
+          riscv_port_yield ();
+          return;
+#endif
           if (rtos::scheduler::locked ())
             {
               return;

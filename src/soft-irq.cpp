@@ -23,6 +23,11 @@
 
 #include <cstdint>
 
+// A QingKe board (RISCV_PFIC) has no CLINT MSIP: its software interrupt is
+// the PFIC's, used for the context switch, and its NVIC_* are the board's
+// (on PFIC interrupts). Nothing here then.
+#if !defined(RISCV_PFIC)
+
 #include <clint.hpp>
 #include <cmsis_device.h>
 #include <riscv-csr.hpp>
@@ -128,3 +133,5 @@ NVIC_SetPriority (IRQn_Type n, std::uint32_t priority)
   (void) n;
   (void) priority;
 }
+
+#endif // !RISCV_PFIC

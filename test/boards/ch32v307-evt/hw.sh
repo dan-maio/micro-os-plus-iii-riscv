@@ -96,12 +96,10 @@ OBJCOPY="${TOOLBIN:+$TOOLBIN/}riscv-none-elf-objcopy"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-# The bytes that go to flash: every loadable section at its load address
-# (.text .. .eh_frame, then .data's initial values), from 0x00000000.
-"$OBJCOPY" -O binary --only-section=.text --only-section=.rodata \
-  --only-section=.preinit_array --only-section=.init_array \
-  --only-section=.fini_array --only-section=.eh_frame --only-section=.data \
-  "$ELF" "$WORK/image.bin" || exit 2
+# The bytes that go to flash: every section with contents, at its load
+# address (.data's initial values after the code), from 0x00000000 --
+# objcopy's binary output skips the NOLOAD RAM sections by itself.
+"$OBJCOPY" -O binary "$ELF" "$WORK/image.bin" || exit 2
 SIZE="$(stat -c %s "$WORK/image.bin")"
 
 echo "hw.sh: $APP -> flash ($SIZE bytes), OpenOCD $OCD"
