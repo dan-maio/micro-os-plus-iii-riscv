@@ -7,7 +7,10 @@
 #
 # Probe: the Raspberry Pi Debug Probe (CMSIS-DAP, SWD), selected by VID:PID
 # 2e8a:000c -- another CMSIS-DAP probe may be connected (the Milk-V Duo's
-# Sipeed, d6e7:3507, was picked first once). OpenOCD: the Raspberry
+# Sipeed, d6e7:3507, was picked first once). The VisionFive 2's "JTAG probe
+# on Pico" has the same VID:PID: the Debug Probe is then selected by its
+# serial number (sysfs: the 2e8a:000c whose product is not "JTAG probe on
+# Pico"). OpenOCD: the Raspberry
 # Pi build (~/.pico-sdk/openocd/0.12.0+dev) with target/rp2350-riscv.cfg --
 # the xPack OpenOCD cannot reach the RP2350's RISC-V debug module over the Arm
 # DAP (its riscv target rejects -dap; measured). OpenOCD only, no GDB.
@@ -133,11 +136,30 @@ LOGS="$BUILD/.hw-logs"; mkdir -p "$LOGS"
 LOG="$LOGS/${APP}.log"
 rm -f "$LOG"
 
+# The Debug Probe, not the VisionFive 2's JTAG probe on Pico (same VID:PID).
+PROBE_SERIAL="" OTHER_PICO_PROBE=0
+for d in /sys/bus/usb/devices/*; do
+  [[ -f "$d/idVendor" && "$(cat "$d/idVendor")" == 2e8a && "$(cat "$d/idProduct")" == 000c ]] || continue
+  if [[ "$(cat "$d/product" 2>/dev/null)" == "JTAG probe on Pico"* ]]; then
+    OTHER_PICO_PROBE=1
+  else
+    PROBE_SERIAL="$(cat "$d/serial" 2>/dev/null)"
+  fi
+done
+SERIAL_ARGS=()
+if [[ -n "$PROBE_SERIAL" ]]; then
+  SERIAL_ARGS=(-c "adapter serial $PROBE_SERIAL")
+elif (( OTHER_PICO_PROBE )); then
+  echo "hw.sh: only the VisionFive 2's JTAG probe on Pico is plugged in (2e8a:000c); plug in the Debug Probe" >&2
+  exit 2
+fi
+
 echo "== Pico 2 (RISC-V) : $APP ($MODE, entry $ENTRY) =="
 
 "$OCD" -s "$SCRIPTS" \
   -f interface/cmsis-dap.cfg \
   -c "cmsis-dap vid_pid 0x2e8a 0x000c" \
+  "${SERIAL_ARGS[@]}" \
   -c "adapter speed $SPEED" \
   -f target/rp2350-riscv.cfg \
   "${SESSION[@]}" \

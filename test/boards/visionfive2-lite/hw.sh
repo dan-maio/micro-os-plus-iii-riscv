@@ -39,8 +39,15 @@
 # Exit: 0 PASS, 1 FAIL, 2 no such test / stale build, 3 TIMEOUT,
 #       4 OPENOCD DIED, 5 NO EXIT (RESULT printed, no semihosting exit).
 #
+# Probe: the DAPLink (0d28:0204, jh7110_daplink.cfg) or the Raspberry Pi
+#        "JTAG probe on Pico" (2e8a:000c, jh7110_picoprobe.cfg), whichever is
+#        plugged in (the DAPLink if both are). The JTAG probe on Pico is
+#        selected by its serial number, read from sysfs by its USB product
+#        name: the Pico 2's Debug Probe has the same VID:PID.
+#
 # Env:  BUILD=<dir>      the CMake build directory  (default: test/build-vf2)
 #       OPENOCD=<path>   a specific OpenOCD
+#       VF2_PROBE=daplink|picoprobe   force the probe (default: detected)
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -129,11 +136,46 @@ if [[ "$OCD" == *"/xPacks/"* ]]; then
   SCRIPTS_ARG=(-s "$(dirname "$(dirname "$OCD")")/openocd/scripts")
 fi
 
+# The probe (see the header).
+usb_present () {
+  local d
+  for d in /sys/bus/usb/devices/*; do
+    [[ -f "$d/idVendor" && "$(cat "$d/idVendor")" == "$1" && "$(cat "$d/idProduct")" == "$2" ]] && return 0
+  done
+  return 1
+}
+picoprobe_serial () {
+  local d
+  for d in /sys/bus/usb/devices/*; do
+    [[ -f "$d/idVendor" && "$(cat "$d/idVendor")" == 2e8a && "$(cat "$d/idProduct")" == 000c ]] || continue
+    [[ "$(cat "$d/product" 2>/dev/null)" == "JTAG probe on Pico"* ]] && { cat "$d/serial"; return; }
+  done
+}
+PROBE="${VF2_PROBE:-}"
+if [[ -z "$PROBE" ]]; then
+  if usb_present 0d28 0204; then
+    PROBE=daplink
+  elif [[ -n "$(picoprobe_serial)" ]]; then
+    PROBE=picoprobe
+  else
+    PROBE=daplink
+  fi
+fi
+case "$PROBE" in
+  daplink|picoprobe) ;;
+  *) echo "hw.sh: VF2_PROBE must be daplink or picoprobe, not '$PROBE'" >&2; exit 2 ;;
+esac
+PROBE_CFG="$HERE/jh7110_$PROBE.cfg"
+if [[ "$PROBE" == picoprobe && -z "${PICOPROBE_SERIAL:-}" ]]; then
+  PICOPROBE_SERIAL="$(picoprobe_serial)"
+  export PICOPROBE_SERIAL
+fi
+
 LOGS="$BUILD/.hw-logs"; mkdir -p "$LOGS"
 LOG="$LOGS/${APP}.log"
 rm -f "$LOG"
 
-echo "== VisionFive 2 Lite : $APP (entry $ENTRY, $NCPU hart(s):$HARTS) =="
+echo "== VisionFive 2 Lite : $APP (entry $ENTRY, $NCPU hart(s):$HARTS, probe $PROBE${PICOPROBE_SERIAL:+ $PICOPROBE_SERIAL}) =="
 
 # The attach is retried, as in the Milk-V Duo's runner (where a probe's
 # second attach read a garbage scan chain every other time). A failed attach
@@ -160,7 +202,7 @@ waited=0 rc=2
 for (( attempt = 1; attempt <= ATTACH_TRIES; attempt++ )); do
   rm -f "$LOG"
   "$OCD" "${SCRIPTS_ARG[@]}" \
-    -f "$HERE/jh7110_daplink.cfg" \
+    -f "$PROBE_CFG" \
     -c "init" \
     "${RESET_ARGS[@]}" \
     -c "foreach n {2 3 4 1} { targets jh7110.cpu\$n; halt }" \

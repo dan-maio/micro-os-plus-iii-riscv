@@ -219,7 +219,7 @@ built for (`riscv_secondary_boot`'s size), one for a single-hart image.
 | console to semihosting | **verdict lines only** (a write containing `RESULT:`); the rest is UART only. Measured: with every line copied, OpenOCD + the Debug Probe (fw 2.0.1) stopped servicing semihosting in long runs (validator: core 0 halted on a valid `SYS_WRITE0` after 43; smp-mat-test lost the debug module after ~114). The trap report also goes to semihosting (mcause, mepc, mtval, ra) |
 | `mtval` | Hazard3 hardwires it to 0 (datasheet): code that needs a fault address decodes the instruction (the validator's DWT emulation does) |
 | harness | kernel platform `riscv-pico2` (`xpm run ... --config riscv-pico2-cmake-gcc-{debug,release}`); `test/pico2/include/cmsis-plus/os-app-config.h` caps rtos-apis's RTOS arena at 96 KiB on hardware and leaves FatFs out (the free store is 468992 bytes; 512 KiB threw bad_alloc), as the Cortex-M Pico 2 board does |
-| `hw.sh` | Raspberry Pi OpenOCD (`~/.pico-sdk/openocd/*`, also looked up on the mounted home), probe pinned by VID:PID **2e8a:000c** (with the Duo's Sipeed probe also plugged in, OpenOCD took that one first); `init; reset init; program <elf> verify; reset init; arm semihosting enable` (both harts)`; resume`; verdict = RESULT line + OpenOCD's exit status (SYS_EXIT) |
+| `hw.sh` | Raspberry Pi OpenOCD (`~/.pico-sdk/openocd/*`, also looked up on the mounted home), probe pinned by VID:PID **2e8a:000c** (with the Duo's Sipeed probe also plugged in, OpenOCD took that one first) and, when the VisionFive 2's "JTAG probe on Pico" (same VID:PID) is also plugged in, by the Debug Probe's serial number; `init; reset init; program <elf> verify; reset init; arm semihosting enable` (both harts)`; resume`; verdict = RESULT line + OpenOCD's exit status (SYS_EXIT) |
 
 ## WeAct RP2350B (test/boards/pico2-rp2350b-psram)
 
@@ -321,8 +321,16 @@ everything below was measured on the board (2026-11-06).
 ### Second probe: Raspberry Pi "JTAG probe on Pico" (jh7110_picoprobe*.cfg)
 
 Every VisionFive 2 config and script in the repo root has a copy for this
-probe, identical except for the probe lines. `hw.sh` and the tests still
-use `jh7110_daplink.cfg`.
+probe, identical except for the probe lines.
+
+`test/boards/visionfive2-lite/hw.sh` (and so every VF2 test under CTest)
+takes the probe that is plugged in: `jh7110_daplink.cfg` when the DAPLink
+(0d28:0204) is there, else `jh7110_picoprobe.cfg` when a 2e8a:000c with the
+USB product name "JTAG probe on Pico" is there, pinned by its serial number
+(read from sysfs). `VF2_PROBE=daplink|picoprobe` forces one. The probe is
+shown in the run's header line. The Pico 2's `hw.sh` in turn pins its Debug
+Probe by serial number, skipping the JTAG probe on Pico, so both can stay
+plugged in.
 
 | DAPLink | JTAG probe on Pico |
 |---|---|
