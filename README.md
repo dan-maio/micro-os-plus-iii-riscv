@@ -665,7 +665,10 @@ of the rounds, by design), mutex-stress (sum 2777 after 35 s, workers within
 +-5 %), instrumentation, rtos-apis (every section but FatFs, 105 s) and
 **cmsis-os-validator 60/60** (every interrupt case through the board's
 `NVIC_*`). Found on the way: the unprotected `switch_stacks()` and the
-latching SysTick (*Interrupts* above).
+latching SysTick (*Interrupts* above). Release (`-cmake-gcc-release`): **9/9
+PASS** as well -- fp-switch 967 rounds, 0 bad (calibrated to 147692 spin
+loops: the optimised hold is faster), mutex-stress within +-3 %, rtos-apis
+the same 33 sections as debug, cmsis-os-validator 60/60.
 
 StarFive VisionFive 2 Lite, JTAG probe on Pico at 10 MHz, full console over
 semihosting, every test in DDR, **every test on all four U74**: **11/11
