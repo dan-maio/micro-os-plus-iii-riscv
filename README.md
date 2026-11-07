@@ -386,7 +386,7 @@ hardware images only (QEMU models neither the chip nor the PFIC).
 | flags | `-march=rv32imafc_zicsr_zifencei -mabi=ilp32f -mcmodel=medany` (multilib `rv32imafc_zicsr_zaamo_zalrsc/ilp32f`) |
 | memory | as configured: **256 KiB code flash + 64 KiB SRAM** -- `FLASH_OBR = 0x03fffefc`, `SRAM_CODE_MODE` bits [9:8] = `10` ("CODE-256KB + RAM-64KB"), and the WCH OpenOCD reports the same. `ESIG_FLACAP` reads 288 KiB: the whole flash, not the split. `linker.ld`: code at the flash's `0x00000000` alias (where the core starts), `.data` copied from flash, 2 KiB IRQ + 2 KiB boot stack |
 | start-up | `startup.S` unchanged (its `csrw mie, zero` is harmless here); `riscv_board_initialize_early()` writes `corecfgr = 0x1f` (WCH's start-up value), the clocks, and starts SysTick free-running |
-| clocks | WCH's own `SystemInit()` + `SetSysClockTo144_HSE()`, register for register: HSE 8 MHz, PLL x18 (the D8C encoding, `PLLMUL = 0000`), **144 MHz** HCLK = PCLK2, PCLK1 72 MHz. Measured against the host's wall clock (semihosting `SYS_TIME`, SysTick ticks between two second edges 9 s apart), two runs: **144.35 MHz** (+0.24 %) and **142.68 MHz** (-0.9 %) -- within the error of catching the edges through semihosting round trips over the WCH-Link; the readable UART at 115200 is the other check |
+| clocks | WCH's own `SystemInit()` + `SetSysClockTo144_HSE()`, register for register: HSE 8 MHz, PLL x18 (the D8C encoding, `PLLMUL = 0000`), **144 MHz** HCLK = PCLK2, PCLK1 72 MHz. Measured against the host's wall clock (semihosting `SYS_TIME`, SysTick ticks between two second edges 9 s apart), three runs: **144.35**, **142.68** and **144.27 MHz** (+0.24, -0.9, +0.19 %) -- within the error of catching the edges through semihosting round trips over the WCH-Link; the readable UART at 115200 is the other check |
 | time base | SysTick (`0xE000F000`), 64-bit, counting up at HCLK; `ch32::systick_now()` |
 | console | USART1, **PA9 TX / PA10 RX**, 115200 8N1 (`BRR = 1250`), through the EVT's J2 jumpers to the WCH-LinkE's CDC port (`/dev/ttyACM0`) |
 | LED | **LED1 on PD0** by a jumper wire (the EVT's LEDs are not connected to the chip in its layout -- Zephyr's board page), active low |
@@ -551,11 +551,12 @@ separate, non-coherent core); `sd_test`.
 
 WCH CH32V307V-EVT-R1, on-board WCH-LinkE, image in flash: **board-basics
 PASS** -- boot from flash into `_start`, static constructors, clocks HSE ->
-PLL x18 (144.35 and 142.68 MHz measured against the host in two runs),
-USART1 115200, LED1 on PD0, key S2 on PA1 released at rest, semihosting
-console and exit; the flash read back identical (2 runs, both PASS). Key
-presses in the 10 s window: 0 in both runs -- whether S2 was pressed is
-not yet confirmed. No kernel test yet (the PFIC path comes first).
+PLL x18 (144.35, 142.68 and 144.27 MHz measured against the host in three
+runs), USART1 115200, LED1 on PD0, key S2 on PA1, semihosting console and
+exit; the flash read back identical (3 runs, all PASS). The key: 0 presses
+in the first two runs -- S2 was not wired (it reaches the chip only through
+J3); with the J3 KEY -> PA1 jumper, **7 presses counted** in the 10 s
+window, released at rest. Installed OpenOCD (patched) used by hw.sh. No kernel test yet (the PFIC path comes first).
 
 
 StarFive VisionFive 2 Lite, JTAG probe on Pico at 10 MHz, full console over
