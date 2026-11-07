@@ -382,9 +382,15 @@ images only (QEMU models neither the chip nor the PFIC). Run:
 `test/boards/ch32v307-evt/hw.sh <app>`.
 
 Tests (`test/ch32v307-evt/`): `board-basics` (kernel-free: start-up,
-clocks, console, LED, key, semihosting) and `smp-test1` (the kernel: three
+clocks, console, LED, key, semihosting), `smp-test1` (the kernel: three
 threads, sleeps, a mutex, a counting semaphore, the LED -- the Pico 2's
-single-core bring-up).
+single-core bring-up) and `pfic-test` (the PFIC path itself, with two
+software-raised peripheral interrupts, IRQ 16 at `0x40` and IRQ 17 at
+`0x00`: an interrupt waking a thread; a higher-priority thread woken from an
+interrupt or inside a critical section running before the waker goes on;
+IRQ 17 nesting inside IRQ 16; the threshold holding IRQ 16 but not IRQ 17;
+IRQ 16 preempting a timer callback in the SysTick handler; 2000
+interrupt-to-thread hand-offs).
 
 | | |
 |---|---|
@@ -482,6 +488,7 @@ What this OpenOCD does wrong (all measured; hw.sh avoids each):
 | `verify_image` | fails silently: its checksum runs in the work area, and `target/wch-riscv.cfg`'s `0x80000000` is not RAM on this chip. Compare a `dump_image` instead |
 | `SYS_CLOCK` | returns OpenOCD's own CPU time (`clock()`), not wall time. `SYS_TIME` is wall time (seconds) -- board-basics measures HCLK against it |
 | flash bank | at `0x00000000` (not `0x08000000`), where the image is linked |
+| gaps | `flash write_image` writes only the segments, so a gap between them keeps the erased value (`e339e339`) while `objcopy -O binary` fills it with zeros: `linker.ld` pads the last flash section to `.data`'s alignment, so the image has no gap and the read-back compare holds |
 | the factory demo's UART | after a debug session halted WCH's demo, its UART showed garbage until a power cycle: its clock read HSI x15 = 120 MHz while its `BRR` (1111) fits 128 MHz -- about 108 000 baud. The tests set their own clock and baud |
 
 ## Build and test
@@ -615,6 +622,13 @@ The kernel on the CH32V307 (PFIC path, 2026-11-07): **smp-test1 PASS** from
 flash -- three threads switched by the PFIC software interrupt, 1 ms SysTick
 ticks through the mtime/mtimecmp code, sleeps, a mutex and a counting
 semaphore under threshold critical sections, the semihosting exit.
+**pfic-test PASS**, 6/6: wake from IRQ 16; preemption 2a (high ran at 1,
+low continued at 2) and 2b (in a section: 11, 12); nesting (IRQ 17 inside
+IRQ 16, nesting 2, `GISR = 0x103`); BASEPRI (threshold `0x40`, inside the
+section IRQ 16 0 / IRQ 17 1, after it IRQ 16 1); the timer callback in
+SysTick (`IACTR0` bit 12) preempted by IRQ 16; 2000/2000 hand-offs in 46
+ms (~23 us each). smp-test1 and board-basics rerun after the linker change:
+PASS.
 
 StarFive VisionFive 2 Lite, JTAG probe on Pico at 10 MHz, full console over
 semihosting, every test in DDR, **every test on all four U74**: **11/11
