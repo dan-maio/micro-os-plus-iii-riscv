@@ -348,7 +348,7 @@ plugged in.
 |---|---|
 | probe | a Raspberry Pi Pico with the "JTAG probe on Pico" firmware: **2e8a:000c**, `CMSIS-DAP v2 Interface` (vendor class, USB bulk) plus a CDC-ACM UART; OpenOCD reports FW 2.0.0, SWD and JTAG supported. The cfg selects `vid_pid 0x2e8a 0x000c` and `backend usb_bulk` |
 | same VID:PID | the Pico 2's Raspberry Pi Debug Probe is also 2e8a:000c. With both plugged in, set `PICOPROBE_SERIAL` (this probe: `E4623492931D2230`); the cfg then adds `adapter serial` |
-| speed | 2000 kHz, the DAPLink's value: not measured with this probe yet |
+| speed | TCK 2000 kHz (the DAPLink's value). Measured 2026-11-07, `hw.sh smp-test2`: the 82 600-byte image loads in **2.6 s (30.7 KiB/s)** against 24.6 s (3.3 KiB/s) with the DAPLink, about 9x; the whole 4-core test (32 console lines over semihosting) took **17 s**, PASS. Other TCK values not measured |
 | SRST | not checked whether this firmware drives a reset line |
 | wiring | the same header pins (TMS 35, TCK 37, TDI 38, TDO 40, GND 39). A session that read both IDCODEs but then only zeros past the chain end (`auto0..18.tap idcode=0x0`, `dtmcontrol is 0`) had **TDI** not reaching the board: TCK, TMS and TDO were working |
 
