@@ -29,7 +29,11 @@ set (UOS_BOARD_LIBS "")
 # RISCV_PFIC: the port's QingKe PFIC path (include/pfic.hpp): the software
 # interrupt as PendSV, SysTick as the tick, the PFIC threshold as BASEPRI,
 # nested interrupts.
+# OS_INTEGER_RTOS_DEFAULT_STACK_SIZE_BYTES: 64 KiB of SRAM; the port's
+# default (8 KiB) let six fp-switch threads exhaust the free store
+# (bad_alloc, measured). 2 KiB is the port's minimum stack.
 set (UOS_BOARD_DEFINES
      RISCV_PFIC
+     OS_INTEGER_RTOS_DEFAULT_STACK_SIZE_BYTES=2048
      SEMIHOST_TRAP_CHOSEN
      "PORT_GREETING=\"µOS++ WCH CH32V307V-EVT (QingKe V4F RV32)\"")

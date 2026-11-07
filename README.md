@@ -390,7 +390,28 @@ software-raised peripheral interrupts, IRQ 16 at `0x40` and IRQ 17 at
 interrupt or inside a critical section running before the waker goes on;
 IRQ 17 nesting inside IRQ 16; the threshold holding IRQ 16 but not IRQ 17;
 IRQ 16 preempting a timer callback in the SysTick handler; 2000
-interrupt-to-thread hand-offs).
+interrupt-to-thread hand-offs). Under the kernel's harness (platform
+`riscv-ch32v307-evt`, xpm configurations
+`riscv-ch32v307-evt-cmake-gcc-debug|release`, CTest cases
+`riscv-ch32v307-evt-<app>-hwd`) also the suites blinky, fp-switch,
+mutex-stress, instrumentation, rtos-apis and cmsis-os-validator
+(`test/ch32v307-evt/<suite>/harness-suite.cpp`, `include/harness-suite.hpp`).
+
+What fits 64 KiB of SRAM: the board sets
+`OS_INTEGER_RTOS_DEFAULT_STACK_SIZE_BYTES=2048` (`board.cmake`; with the
+port's 8 KiB six fp-switch threads ran the free store out, `bad_alloc`), and
+the board's `include/cmsis-plus/os-app-config.h` caps a suite's RTOS arena
+at 20 KiB and leaves rtos-apis' FatFs part out (as on the Pico 2).
+
+Console: `riscv_board_console_write()` (trace, stdout) writes the UART and,
+on a hardware image under the debugger, semihosting too -- from threads
+only, never from a trap -- so a run's output reaches the PC; the suites'
+RESULT line goes to both. Peripheral interrupts: `src/irq.cpp`, generated
+from WCH's vector table (PFIC 16..103, WCH's handler names, weak), and the
+`NVIC_*` Cortex-M code calls: IRQ n = PFIC 16 + n, every one at the
+kernel-aware `0x40`; enabling discards a stale request; a pend from a
+thread waits until the handler has run (the CMSIS validator's "IRQ 0" is
+PFIC 16, WCH's WWDG vector).
 
 | | |
 |---|---|
@@ -428,6 +449,8 @@ board-selected by the define `RISCV_PFIC` (the other boards are unchanged):
 | PendSV request + DSB/ISB | `reschedule()` pends 14 and, from a thread that 14 can interrupt now, waits until `PFIC_IPR0` shows it taken -- precise: the thread does not run on past its request. In a handler or a critical section it is taken when the handlers return / the threshold drops (`critical_section::exit()` waits for it too) |
 | nesting | `INTSYSCR = 0x0a`: INESTEN, PMTCFG `10` (4 levels, priority bits [7:6]), HPE off |
 | IPSR != 0 | `riscv_trap_nesting != 0` (the interrupt depth) |
+| PendSV's own BASEPRI | `switch_stacks()` runs inside a kernel critical section (threshold `0x40`) and clears the request and the pending 14 there, as the Cortex-M PendSV handler does. The kernel's `internal_switch_threads()` re-links and unlinks the ready list without protecting itself; without the section SysTick preempted it mid-way and woke a thread into the same list -- mutex-stress's ten workers then stopped for good, the reporter thread running on (measured) |
+| a level timer | CLINT's timer interrupt is a level that drops when mtimecmp moves ahead; the QingKe SysTick **latches** `CNTIF` and the PFIC latches the pending bit. So every compare the port writes is followed by clearing both and, if the counter has reached the deadline meanwhile, pending 12 by software. Without it a compare passed during a slow handler (rtos-apis' 1-tick periodic timer printing from the tick) kept 12 pending: SysTick re-entered back to back and the switch never ran (measured on the stuck chip: `IPR0 = 0x5000`, `CNTIF = 1`, the switch's trap entry preempted) |
 
 Priorities: `0x00` zero-latency (never masked), `0x40` kernel-aware,
 `0x80` SysTick, `0xC0` the switch. The full frame is saved by the shared
@@ -457,8 +480,12 @@ The upstream OpenOCD does not know the WCH-LinkE's protocol; WCH's own
 
 **hw.sh** (`test/boards/ch32v307-evt/hw.sh <app> [seconds]`): `flash
 write_image erase <elf>` (the WCH driver erases the **whole chip**), the
-flash read back with `dump_image` and compared on the PC with `objcopy -O
-binary` of the ELF (`FLASH READBACK DIFFERS` = exit 6), then a second session
+flash read back with `dump_image` and compared on the PC, segment by
+segment, with the ELF's LOAD file bytes (a gap between segments stays erased
+and is not compared); on a mismatch it reads the flash once more before
+failing (`FLASH READBACK DIFFERS` = exit 6: once, a 186 KB image read back
+with one wrong byte, and two new read-backs were identical -- a read error
+over the link, not a bad write), then a second session
 `reset halt`, `arm semihosting enable`, `resume`. OpenOCD ends itself on the
 test's semihosting `SYS_EXIT`, with its code: exit 0 PASS, 1 FAIL, 3
 TIMEOUT, 4 OPENOCD DIED, 5 NO EXIT. Env: `BUILD=` (default
@@ -488,7 +515,7 @@ What this OpenOCD does wrong (all measured; hw.sh avoids each):
 | `verify_image` | fails silently: its checksum runs in the work area, and `target/wch-riscv.cfg`'s `0x80000000` is not RAM on this chip. Compare a `dump_image` instead |
 | `SYS_CLOCK` | returns OpenOCD's own CPU time (`clock()`), not wall time. `SYS_TIME` is wall time (seconds) -- board-basics measures HCLK against it |
 | flash bank | at `0x00000000` (not `0x08000000`), where the image is linked |
-| gaps | `flash write_image` writes only the segments, so a gap between them keeps the erased value (`e339e339`) while `objcopy -O binary` fills it with zeros: `linker.ld` pads the last flash section to `.data`'s alignment, so the image has no gap and the read-back compare holds |
+| gaps | `flash write_image` writes only the segments' file bytes, so a gap between them (or a segment's memory-only tail: a padding-only section becomes NOBITS) keeps the erased value (`e339e339`); hw.sh compares each segment's file bytes only |
 | the factory demo's UART | after a debug session halted WCH's demo, its UART showed garbage until a power cycle: its clock read HSI x15 = 120 MHz while its `BRR` (1111) fits 128 MHz -- about 108 000 baud. The tests set their own clock and baud |
 
 ## Build and test
@@ -629,6 +656,16 @@ section IRQ 16 0 / IRQ 17 1, after it IRQ 16 1); the timer callback in
 SysTick (`IACTR0` bit 12) preempted by IRQ 16; 2000/2000 hand-offs in 46
 ms (~23 us each). smp-test1 and board-basics rerun after the linker change:
 PASS.
+
+The harness on the CH32V307 (2026-11-07, platform `riscv-ch32v307-evt`,
+debug): **9/9 PASS** -- board-basics, smp-test1, pfic-test, blinky,
+fp-switch (1188 rounds, 0 bad: the single-precision registers and `fcsr`
+held across preemption; on one core the higher-priority threads take most
+of the rounds, by design), mutex-stress (sum 2777 after 35 s, workers within
++-5 %), instrumentation, rtos-apis (every section but FatFs, 105 s) and
+**cmsis-os-validator 60/60** (every interrupt case through the board's
+`NVIC_*`). Found on the way: the unprotected `switch_stacks()` and the
+latching SysTick (*Interrupts* above).
 
 StarFive VisionFive 2 Lite, JTAG probe on Pico at 10 MHz, full console over
 semihosting, every test in DDR, **every test on all four U74**: **11/11

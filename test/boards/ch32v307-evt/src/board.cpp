@@ -15,6 +15,10 @@
 #include <riscv-board.hpp>
 #include <uart.hpp>
 #include <board.hpp>
+#if defined(HW_BUILD) && defined(SEMIHOST)
+#include <riscv-hart.hpp>
+#include <semihosting.hpp>
+#endif
 
 namespace clocks
 {
@@ -44,8 +48,18 @@ riscv_board_initialize (void)
   uart::init (board::UART_BAUD);
 }
 
+// The console (trace, stdout): the UART, and on a hardware image under the
+// debugger also semihosting, so the run's output reaches the PC without
+// reading the UART. Not from a trap: a semihosting call halts the core
+// (the trap report writes semihosting itself, src/trap.cpp).
 extern "C" void
 riscv_board_console_write (const char* s, std::size_t n)
 {
   uart::write (s, n);
+#if defined(HW_BUILD) && defined(SEMIHOST)
+  if (semihosting::attached () && !riscv::in_trap ())
+    {
+      semihosting::write_buf (s, n);
+    }
+#endif
 }

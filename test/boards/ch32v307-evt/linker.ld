@@ -72,9 +72,10 @@ SECTIONS
   .gcc_except_table : ALIGN(4)
   {
     *(.gcc_except_table .gcc_except_table.*)
-    /* Pad to .data's alignment: its initial values follow without a gap,
-     * so the flash holds exactly the bytes of the image (an unwritten gap
-     * keeps the erased value and the read-back compare in hw.sh fails). */
+    /* Pad to .data's alignment, so its initial values follow the code
+     * without a gap (hw.sh compares each segment's file bytes only, so a
+     * gap -- or this padding alone, which the linker makes NOBITS -- is
+     * harmless either way). */
     . = ALIGN(16);
   } > FLASH
 

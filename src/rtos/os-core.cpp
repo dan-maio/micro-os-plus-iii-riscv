@@ -224,6 +224,26 @@ namespace
                                + static_cast<std::uint64_t> (
                                    riscv_port_clint_offset),
                            hart);
+#if defined(RISCV_PFIC)
+    // CLINT's timer interrupt is a level: mtimecmp moved into the future
+    // drops it. The QingKe SysTick LATCHES its flag (CNTIF) and the PFIC
+    // latches the pending bit, so a compare passed while a handler ran
+    // (a 1-tick periodic timer printing to the UART from the tick -- rtos-
+    // apis) kept interrupt 12 pending after the guard had moved the compare
+    // a period ahead: SysTick re-entered back to back and the software
+    // interrupt (the switch) never ran (measured: IPR0 0x5000, CNTIF 1,
+    // the switch's trap entry preempted at its first instructions). Give it
+    // the level's behaviour: clear both after the new compare is written,
+    // then look at the counter again -- a deadline reached by now (also one
+    // crossed between the write and the clear) is pended by software; one
+    // crossed later sets CNTIF itself, as the clear came first.
+    pfic::reg32 (pfic::STK_SR) = 0u;
+    pfic::clear_pending (pfic::IRQ_SYSTICK);
+    if (clint::now () >= deadline)
+      {
+        pfic::set_pending (pfic::IRQ_SYSTICK);
+      }
+#endif
   }
 
   void
@@ -812,7 +832,20 @@ namespace os
         stack::element_t*
         switch_stacks (stack::element_t* sp)
         {
-          // Runs in a trap, interrupts masked.
+#if defined(RISCV_PFIC)
+          // In the software interrupt, which more urgent interrupts can
+          // preempt: protect the lists as the Cortex-M port's PendSV does
+          // (BASEPRI there, the PFIC threshold here). Without it, SysTick
+          // preempted internal_switch_threads() in the middle of its
+          // relink/unlink and woke a thread into the same list --
+          // mutex-stress's workers then stopped for good (measured). The
+          // request and the pending software interrupt are cleared inside
+          // the section, as PENDSVCLR is.
+          rtos::interrupts::critical_section ics;
+          pfic::clear_pending (pfic::IRQ_SWI);
+#endif
+          // Runs in a trap, interrupts masked (on a PFIC board: with the
+          // kernel's threshold set).
           riscv_port_pending[0] = false;
           riscv_port_yield_deferred[0] = false;
 

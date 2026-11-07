@@ -108,44 +108,42 @@ namespace
   }
 } // namespace
 
-extern "C" bool
-riscv_board_pfic_interrupt (unsigned irq)
+// The board dispatches PFIC interrupts to WCH's handler names
+// (test/boards/ch32v307-evt/src/irq.cpp): 16 = WWDG, 17 = PVD.
+extern "C" void
+PVD_IRQHandler (void)
 {
-  if (irq == kIrqZero)
+  // Zero-latency: no kernel calls.
+  g_irq17_nesting = riscv_trap_nesting[0];
+  g_irq17_gisr = pfic::reg32 (pfic::GISR);
+  g_irq17_count = g_irq17_count + 1;
+  g_irq17_done = true;
+}
+
+extern "C" void
+WWDG_IRQHandler (void)
+{
+  g_irq16_count = g_irq16_count + 1;
+  g_irq16_systick_active
+      = (pfic::reg32 (pfic::IACTR0) >> pfic::IRQ_SYSTICK) & 1u;
+  if (g_mode == mode::nest)
     {
-      // Zero-latency: no kernel calls.
-      g_irq17_nesting = riscv_trap_nesting[0];
-      g_irq17_gisr = pfic::reg32 (pfic::GISR);
-      g_irq17_count = g_irq17_count + 1;
-      g_irq17_done = true;
-      return true;
+      g_irq17_done = false;
+      raise (kIrqZero);
+      // Taken a few instructions later, inside this handler.
+      for (int i = 0; i < 1000 && !g_irq17_done; ++i)
+        {
+        }
+      g_irq16_saw_17 = g_irq17_done;
     }
-  if (irq == kIrqKernel)
+  else if (g_mode == mode::post_high)
     {
-      g_irq16_count = g_irq16_count + 1;
-      g_irq16_systick_active
-          = (pfic::reg32 (pfic::IACTR0) >> pfic::IRQ_SYSTICK) & 1u;
-      if (g_mode == mode::nest)
-        {
-          g_irq17_done = false;
-          raise (kIrqZero);
-          // Taken a few instructions later, inside this handler.
-          for (int i = 0; i < 1000 && !g_irq17_done; ++i)
-            {
-            }
-          g_irq16_saw_17 = g_irq17_done;
-        }
-      else if (g_mode == mode::post_high)
-        {
-          g_high_go.post ();
-        }
-      else
-        {
-          g_sem.post ();
-        }
-      return true;
+      g_high_go.post ();
     }
-  return false;
+  else
+    {
+      g_sem.post ();
+    }
 }
 
 namespace

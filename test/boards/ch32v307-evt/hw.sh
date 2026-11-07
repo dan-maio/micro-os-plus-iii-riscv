@@ -20,10 +20,11 @@
 #                              (flash banks: 0x00000000, measured). The
 #                              erase is the whole chip (the WCH driver has no
 #                              sector erase).
-#   dump_image + cmp           the flash read back and compared with the
-#                              image's bytes on the PC (verify_image needs a
-#                              work area, and the config's 0x80000000 is not
-#                              RAM on this chip)
+#   dump_image + cmp           the flash read back and compared, segment by
+#                              segment, with the ELF's LOAD file bytes on the
+#                              PC (verify_image needs a work area, and the
+#                              config's 0x80000000 is not RAM on this chip;
+#                              gaps between segments stay erased)
 #   reset halt, arm semihosting enable, resume
 #
 # Two traps of this OpenOCD (measured):
@@ -73,7 +74,14 @@ if [[ ! -f "$ELF" ]]; then
 fi
 ELF="$(readlink -f "$ELF")"
 
-STALE="$(find "$ROOT/src" "$ROOT/include" "$HERE" \
+# The port sources the image links: a kernel-free image (BOARD_TEST_NO_KERNEL,
+# no os_systick_handler) has only startup.S, trap.S and src/bare/ of src/.
+NM="$(ls -d "$HOME"/.local/xPacks/@xpack-dev-tools/riscv-none-elf-gcc/*/.content/bin/riscv-none-elf-nm 2>/dev/null | sort -V | tail -1)"
+PORT_SRC=("$ROOT/src")
+if ! "${NM:-riscv-none-elf-nm}" "$ELF" 2>/dev/null | grep -q " os_systick_handler$"; then
+  PORT_SRC=("$ROOT/src/startup.S" "$ROOT/src/trap.S" "$ROOT/src/bare")
+fi
+STALE="$(find "${PORT_SRC[@]}" "$ROOT/include" "$HERE" \
   "$BOARD_TESTS/$APP" "$BOARD_TESTS/include" "$BOARD_TESTS/src" \
   -type f -newer "$ELF" \( -name '*.cpp' -o -name '*.c' -o -name '*.S' -o -name '*.h' -o -name '*.hpp' -o -name '*.ld' \) 2>/dev/null | head -3)"
 if [[ -n "$STALE" ]]; then
@@ -96,11 +104,19 @@ OBJCOPY="${TOOLBIN:+$TOOLBIN/}riscv-none-elf-objcopy"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-# The bytes that go to flash: every section with contents, at its load
-# address (.data's initial values after the code), from 0x00000000 --
-# objcopy's binary output skips the NOLOAD RAM sections by itself.
-"$OBJCOPY" -O binary "$ELF" "$WORK/image.bin" || exit 2
-SIZE="$(stat -c %s "$WORK/image.bin")"
+READELF="${TOOLBIN:+$TOOLBIN/}riscv-none-elf-readelf"
+# What goes to flash: the LOAD segments' FILE bytes at their load addresses
+# (the code, then .data's initial values). flash write_image writes exactly
+# those; a gap between segments, or the memory-only tail of a segment, is
+# not written and keeps the erased value, so the read-back compare checks
+# each segment's file bytes and nothing else.
+SEGS="$("$READELF" -lW "$ELF" | awk '$1 == "LOAD" && strtonum($5) > 0 && strtonum($4) < 0x20000000 { print $2, $4, $5 }')"
+[[ -n "$SEGS" ]] || { echo "hw.sh: no flash segments in $ELF" >&2; exit 2; }
+SIZE=0
+while read -r off paddr filesz; do
+  end=$(( paddr + filesz ))
+  (( end > SIZE )) && SIZE=$end
+done <<< "$SEGS"
 
 echo "hw.sh: $APP -> flash ($SIZE bytes), OpenOCD $OCD"
 
@@ -116,10 +132,33 @@ if [[ $rc -ne 0 ]]; then
   echo "hw.sh: OPENOCD DIED while programming (rc=$rc)" >&2
   exit 4
 fi
-if ! cmp -s "$WORK/image.bin" "$WORK/back.bin"; then
-  cmp "$WORK/image.bin" "$WORK/back.bin" | head -3 >&2
-  echo "hw.sh: FLASH READBACK DIFFERS" >&2
-  exit 6
+# Compare every flash segment with the read-back; 0 = identical.
+compare_segments () {
+  while read -r off paddr filesz; do
+    dd if="$ELF" of="$WORK/seg.bin" bs=1 skip=$(( off )) count=$(( filesz )) status=none
+    dd if="$WORK/back.bin" of="$WORK/seg.back" bs=1 skip=$(( paddr )) count=$(( filesz )) status=none
+    if ! cmp -s "$WORK/seg.bin" "$WORK/seg.back"; then
+      printf 'hw.sh: read-back differs in the segment at 0x%x (%d bytes): %d byte(s)\n' \
+        $(( paddr )) $(( filesz )) "$(cmp -l "$WORK/seg.bin" "$WORK/seg.back" | wc -l)" >&2
+      cmp -l "$WORK/seg.bin" "$WORK/seg.back" | head -3 >&2
+      return 1
+    fi
+  done <<< "$SEGS"
+  return 0
+}
+if ! compare_segments; then
+  # Measured once (rtos-apis, 186 KB): one byte differed, and two new
+  # read-backs of the same flash were identical to the image -- a read
+  # error over the link, not a bad write. Read once more before failing.
+  echo "hw.sh: reading the flash back a second time" >&2
+  "$OCD" -s "$SCRIPTS" -f interface/wlink.cfg -f target/wch-riscv.cfg \
+    -c "init" -c "halt" -c "dump_image \"$WORK/back.bin\" 0x00000000 $SIZE" \
+    -c "shutdown" > "$WORK/readback.log" 2>&1
+  if ! compare_segments; then
+    echo "hw.sh: FLASH READBACK DIFFERS" >&2
+    exit 6
+  fi
+  echo "hw.sh: second read-back identical (the first one was a read error)" >&2
 fi
 echo "hw.sh: flash programmed and read back identical"
 
