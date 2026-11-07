@@ -513,6 +513,26 @@ the controller unused (PWREN/CLKENA 0). About 2.9 MB/s both ways.
 | emmc-probe | read only (its image has no `emmc::write`): card, GPT, partitions, the area -- PASS |
 | emmc-fs-test | FatFs 0.13.1 (core copied from the harness xPack, `emmc-fs-test/fatfs/`, without the xPack's `FF_FS_POSIX_INTEGRATION`) on the area, FAT32, 32 KiB clusters; the disk layer refuses any sector outside it; formats only when no filesystem is there; `RUNS.TXT` counts the runs; text, 64 KiB and 1 MiB files written, read back, listed, deleted, re-read after a remount; both GPT copies, partitions 1-2, the first 4 MiB of the vfat partition and the first and last MiB of the Linux root are hashed before and after: unchanged. Runs 1 (formatted), 2 and 3 (harness) PASS, hash `02a3425c229d9a83` every time. The partition table is not written: Linux does not see this filesystem |
 
+USB device (2026-11-07) on the **USB-C connector** (the board's power input):
+schematic page 22, J13's data pins go to HSD2 of U27 (FSUSB42 2:1 switch),
+whose common side is the JH-7110's USB 2.0 PHY; SEL = **GPIO62**: 0 = the
+USB-A hub (Linux: `dr_mode = "host"`), 1 = the USB-C. The controller is the
+Cadence USBSS-DRD (`usb@10100000`, OTG DID `0x0004024e` = cdns3 v1, device
+controller version `0x0002450d`). TinyUSB has no Cadence driver:
+`test/boards/visionfive2-lite/usb/cdns3/dcd_cdns3.c` is one, from Linux's
+`cdns3-gadget.c` / `cdns3-ep0.c` (polled, full speed forced, EP0 through a
+2-TRB pool with the controller's own STATUS stage behind `EP_CMD_REQ_CMPL`,
+data endpoints on small TRB rings closed by a LINK TRB, transfers held until
+`USB_CONF_CFGSET`), registered in the local TinyUSB as `OPT_MCU_JH7110`.
+
+| | |
+|---|---|
+| bring-up | `usb/vf2-usb.cpp`, each step from Linux and measured: stg_syscon+4 PLL/refclk/suspend-bypass + strap DEVICE, STG clocks 1..6 on, resets 7..10 released, PHY RX power + LS keep-alive off + `USB_PDRSTN_SPLIT`, OTG `DEV_BUS_REQ \| OTG_DIS` until `DEV_READY`, GPIO62 = 1. A block left running by the previous image is first disconnected (`DEVDS`, 200 ms) and put back in reset: without it the PC never saw a disconnect between runs and did not re-enumerate |
+| DMA | not cache-coherent on the JH-7110 (Linux: the L2 controller's `FLUSH64` for every DMA sync): every TRB and buffer goes through `vf2_dcache_flush()`; TinyUSB buffers are 64-byte aligned (`CFG_TUSB_MEM_ALIGN`) |
+| smp-test-usb-cdc-acm | CDC-ACM `Cafe:4013`, line echo, PASS on Escape; host `test/boards/pico2/usb-host.py cdc`. Passed (enumeration, echo both ways); with the shared line-buffered glue a PC-side tty echo in the instant before the port goes raw can feed the board's own text back and replace the line (measured: rx_line = "[cdc] mounted") |
+| smp-test-usb-cdc-file | binary CDC, no echo: the PC sends `name.dat` (1 MiB), the board keeps it in DDR (4 MiB buffer), returns it with its CRC-32, the PC saves `name.dat.back`, compares and answers K/X. Host: `smp-test-usb-cdc-file/usb-file-host.py`. Run twice: **PASS**, identical, CRC `1dca192b`; PC to board 434 KiB/s, board to PC 853 KiB/s (full speed, 64-byte transfers) |
+| run | `hw.sh smp-test-usb-cdc-file 300 &`, then, once the UART shows `[usb] mounted`, `cd test/visionfive2-lite/smp-test-usb-cdc-file && python3 usb-file-host.py name.dat` |
+
 Before (2026-11-06, DAPLink, 11/11 PASS):
 - SMP on the four U74 (`OS_NCPU = 4`):
   - **smp-test2**: one worker per core, every beat read from mhartid on its

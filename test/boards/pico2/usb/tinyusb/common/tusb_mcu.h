@@ -541,6 +541,13 @@
   #define TUP_DCD_ENDPOINT_MAX 8
 
 //--------------------------------------------------------------------+
+// StarFive JH-7110 (VisionFive 2): Cadence USBSS-DRD (cdns3 v1), device
+// controller version 0x0002450d; 16 endpoint numbers (EP_SEL 3:0)
+//--------------------------------------------------------------------+
+#elif TU_CHECK_MCU(OPT_MCU_JH7110)
+  #define TUP_DCD_ENDPOINT_MAX 16
+
+//--------------------------------------------------------------------+
 // Broadcom
 //--------------------------------------------------------------------+
 #elif TU_CHECK_MCU(OPT_MCU_BCM2711, OPT_MCU_BCM2835, OPT_MCU_BCM2837)

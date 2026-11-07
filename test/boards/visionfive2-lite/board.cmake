@@ -38,3 +38,31 @@ set (UOS_BOARD_DEFINES
      SEMIHOST_TRAP_CHOSEN
      RISCV_HART_BASE=1
      "PORT_GREETING=\"µOS++ StarFive VisionFive 2 Lite (JH-7110S, SiFive U74 RV64GC)\"")
+
+# The USB device stack for the USB test: the TinyUSB core and class drivers
+# the Pico 2 carries (test/boards/pico2/usb/tinyusb), the Cadence USBSS-DRD
+# device driver written for this board (usb/cdns3/dcd_cdns3.c, from Linux's
+# cdns3 gadget driver), the bring-up and DMA cache maintenance
+# (usb/vf2-usb.cpp), and the portable CDC glue and descriptors of the
+# Pico 2. Linked only into the USB test (test/visionfive2-lite/tests.cmake).
+set (_pico2_usb "${CMAKE_CURRENT_LIST_DIR}/../pico2/usb")
+set (UOS_BOARD_USB_INCLUDE
+     "${CMAKE_CURRENT_LIST_DIR}/usb"
+     "${_pico2_usb}/tinyusb")
+set (UOS_BOARD_USB_CORE_SOURCES
+     "${_pico2_usb}/tinyusb/tusb.c"
+     "${_pico2_usb}/tinyusb/common/tusb_fifo.c"
+     "${_pico2_usb}/tinyusb/device/usbd.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/cdns3/dcd_cdns3.c"
+     "${CMAKE_CURRENT_LIST_DIR}/usb/vf2-usb.cpp")
+set (UOS_BOARD_USB_CDC_INCLUDE "${CMAKE_CURRENT_LIST_DIR}/usb/cdc" "${_pico2_usb}/cdc")
+set (UOS_BOARD_USB_CDC_SOURCES
+     "${_pico2_usb}/tinyusb/class/cdc/cdc_device.c"
+     "${_pico2_usb}/cdc/usb_descriptors.c"
+     "${_pico2_usb}/cdc/usb_cdc.c")
+# The binary CDC file test (smp-test-usb-cdc-file) drives TinyUSB's CDC API
+# directly: the descriptors, not the line-buffered glue (usb_cdc.c), which
+# echoes and prints status text the host could reflect.
+set (UOS_BOARD_USB_CDC_RAW_SOURCES
+     "${_pico2_usb}/tinyusb/class/cdc/cdc_device.c"
+     "${_pico2_usb}/cdc/usb_descriptors.c")

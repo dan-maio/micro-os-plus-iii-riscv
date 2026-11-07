@@ -80,9 +80,21 @@ endfunction ()
 set (_vf2_fatfs_tests emmc-fs-test)
 set (_vf2_fatfs_dir "${CMAKE_CURRENT_LIST_DIR}/emmc-fs-test/fatfs")
 
+# The USB device test: TinyUSB with the board's Cadence driver and the CDC
+# glue (board.cmake UOS_BOARD_USB_*). Its tusb_config.h directory goes first
+# on the include path.
+set (_vf2_usb_cdc_tests smp-test-usb-cdc-acm)
+set (_vf2_usb_cdc_raw_tests smp-test-usb-cdc-file)
+
 function (board_test_sources _app _out)
   if ("${_app}" IN_LIST _vf2_fatfs_tests)
     set (${_out} "${_vf2_fatfs_dir}/source/ff.c" "${_vf2_fatfs_dir}/source/ffunicode.c"
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_usb_cdc_tests)
+    set (${_out} ${UOS_BOARD_USB_CORE_SOURCES} ${UOS_BOARD_USB_CDC_SOURCES}
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_usb_cdc_raw_tests)
+    set (${_out} ${UOS_BOARD_USB_CORE_SOURCES} ${UOS_BOARD_USB_CDC_RAW_SOURCES}
          PARENT_SCOPE)
   else ()
     set (${_out} "" PARENT_SCOPE)
@@ -92,6 +104,9 @@ endfunction ()
 function (board_test_includes _app _out)
   if ("${_app}" IN_LIST _vf2_fatfs_tests)
     set (${_out} "${_vf2_fatfs_dir}/include" PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_usb_cdc_tests OR "${_app}" IN_LIST _vf2_usb_cdc_raw_tests)
+    set (${_out} ${UOS_BOARD_USB_CDC_INCLUDE} ${UOS_BOARD_USB_INCLUDE}
+         PARENT_SCOPE)
   else ()
     set (${_out} "" PARENT_SCOPE)
   endif ()

@@ -212,6 +212,7 @@
 
 // Sophgo (this tree's addition: the Milk-V Duo's DWC2, test/boards/milkv-duo/usb)
 #define OPT_MCU_CV180X           2900  ///< Sophgo CV180x (C906, DWC2 OTG)
+#define OPT_MCU_JH7110           3000  ///< StarFive JH-7110 (U74, Cadence USBSS-DRD cdns3)
 
 // Check if configured MCU is one of listed
 // Apply TU_MCU_IS_EQUAL with || as separator to list of input
