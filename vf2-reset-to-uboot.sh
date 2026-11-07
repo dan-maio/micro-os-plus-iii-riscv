@@ -30,8 +30,8 @@
 #                  it reset the SoC, then tries to disarm it after U-Boot is
 #                  back (the WDT is in the always-on domain).
 #
-#     RESET=srst   the probe's RST/SRST wired to 40-pin header pin 36
-#                  (GND to pin 39). Uses jh7110_daplink_srst.cfg.
+#     RESET=srst   the probe's RST/SRST wired to the board's real reset net
+#                  (Reset button net / reset test point), NOT pin 36 (GPIO36).
 #
 #     RESET=power  no reset source: this script just sends the key stream;
 #                  you power-cycle the board (or press an external reset).
@@ -155,7 +155,7 @@ case "$RESET" in
     fi
     ;;
   srst|run)
-    echo "reset-to-uboot: SRST reset (RST must be wired to pin 36)"
+    echo "reset-to-uboot: SRST reset (RST must be wired to the board reset net, NOT pin 36)"
     echo "                cfg $CFG"
     "$OCD" "${SCRIPTS_ARG[@]}" -f "$CFG" \
       -c 'init' \
@@ -198,6 +198,6 @@ if [[ "$RESET" == wdt || "$RESET" == soft ]]; then
   echo "  openocd -f $CFG_WDT_OFF"
   echo "or power-cycle it."
 elif [[ "$RESET" == srst || "$RESET" == run ]]; then
-  echo "If Linux still booted: verify RST/SRST is wired to pin 36, or use"
+  echo "If Linux still booted: verify RST/SRST is wired to the board reset net (not pin 36), or use"
   echo "  RESET=power $0 $SERIAL $SECS"
 fi

@@ -18,6 +18,8 @@ before the number decreases to 0.”*
 | `jh7110_jtag_key.cfg` | inject a U-Boot key through UART0 loopback (JTAG only) |
 | `jh7110_daplink_srst.cfg` | SRST enabled — only if wired to the board reset net, **not** pin 36 |
 | `jh7110_daplink.cfg` | the normal JTAG config (diagnostics) |
+| `vf2-reset-to-uboot-picoprobe.sh`, `vf2-jtag-stop-uboot-picoprobe.sh` | the same scripts for the "JTAG probe on Pico" (2e8a:000c): they use the `*_picoprobe*.cfg` copies below and check `lsusb` for 2e8a:000c |
+| `jh7110_picoprobe*.cfg`, `jh7110_*_picoprobe.cfg` | the configs above for the JTAG probe on Pico (CMSIS-DAP v2, USB bulk); only the probe lines differ. With the Pico 2's Debug Probe (same VID:PID) also plugged in, set `PICOPROBE_SERIAL=E4623492931D2230` |
 | `vf2-j20.png` | crop of the QSG showing the J20 fastboot pins |
 
 The scripts take the `jh7110_*.cfg` files from their own directory. To use

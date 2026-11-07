@@ -318,6 +318,32 @@ everything below was measured on the board (2026-11-06).
 | diagnostics | every run keeps a timestamped log in `test/build-vf2/.hw-logs/`; on a timeout `hw.sh` asks the live OpenOCD (Tcl port 6666) for hart 1's `pc mcause mepc mtval ra sp mstatus dcsr` and the port's `riscv_semihosting_absent` before stopping it |
 | wiring | 40-pin header: TMS 35, TCK 37, TDI 38, TDO 40, GND 39 (pin 36 = GPIO36, not reset, not used); console UART0 TX pin 8, RX pin 10 |
 
+### Second probe: Raspberry Pi "JTAG probe on Pico" (jh7110_picoprobe*.cfg)
+
+Every VisionFive 2 config and script in the repo root has a copy for this
+probe, identical except for the probe lines. `hw.sh` and the tests still
+use `jh7110_daplink.cfg`.
+
+| DAPLink | JTAG probe on Pico |
+|---|---|
+| `jh7110_daplink.cfg` | `jh7110_picoprobe.cfg` |
+| `jh7110_daplink_debug.cfg` | `jh7110_picoprobe_debug.cfg` |
+| `jh7110_daplink_semihost.cfg` | `jh7110_picoprobe_semihost.cfg` |
+| `jh7110_daplink_srst.cfg` | `jh7110_picoprobe_srst.cfg` |
+| `jh7110_wdt_reset.cfg` | `jh7110_wdt_reset_picoprobe.cfg` |
+| `jh7110_wdt_disable.cfg` | `jh7110_wdt_disable_picoprobe.cfg` |
+| `jh7110_jtag_key.cfg` | `jh7110_jtag_key_picoprobe.cfg` |
+| `vf2-reset-to-uboot.sh` | `vf2-reset-to-uboot-picoprobe.sh` |
+| `vf2-jtag-stop-uboot.sh` | `vf2-jtag-stop-uboot-picoprobe.sh` |
+
+| | |
+|---|---|
+| probe | a Raspberry Pi Pico with the "JTAG probe on Pico" firmware: **2e8a:000c**, `CMSIS-DAP v2 Interface` (vendor class, USB bulk) plus a CDC-ACM UART; OpenOCD reports FW 2.0.0, SWD and JTAG supported. The cfg selects `vid_pid 0x2e8a 0x000c` and `backend usb_bulk` |
+| same VID:PID | the Pico 2's Raspberry Pi Debug Probe is also 2e8a:000c. With both plugged in, set `PICOPROBE_SERIAL` (this probe: `E4623492931D2230`); the cfg then adds `adapter serial` |
+| speed | 2000 kHz, the DAPLink's value: not measured with this probe yet |
+| SRST | not checked whether this firmware drives a reset line |
+| wiring | the same header pins (TMS 35, TCK 37, TDI 38, TDO 40, GND 39). A session that read both IDCODEs but then only zeros past the chain end (`auto0..18.tap idcode=0x0`, `dtmcontrol is 0`) had **TDI** not reaching the board: TCK, TMS and TDO were working |
+
 ## Build and test
 
 Toolchain: xPack `riscv-none-elf-gcc` 15.2.0-1.1 (found under `~/.local/xPacks`).
