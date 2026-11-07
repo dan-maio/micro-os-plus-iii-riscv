@@ -7,15 +7,17 @@
 #
 # Defaults:
 #   serial   /dev/ttyUSB0
-#   seconds  60 with RESET=wdt, else 15
+#   seconds  10 for RESET=wdt, 15 otherwise
 #
 # Environment:
 #   RESET    wdt | srst | power | halt | run   (default: wdt)
-#   CFG      OpenOCD config (default: by RESET, from PROJ)
-#   PROJ     directory holding the jh7110_*.cfg files (default: this one)
+#   CFG      OpenOCD config (default: chosen by RESET, from PROJ)
+#   PROJ     directory with the jh7110_*.cfg files (default: this
+#            script's own; an Eclipse workspace passes its project dir)
 #   OPENOCD  path to openocd
 #   BAUD     115200
 #   KEY      "\r" (CR; any key stops U-Boot autoboot)
+#   WDT_WAIT seconds to wait for the watchdog reset (default: 10)
 #
 # IMPORTANT, measured on the VisionFive 2 Lite v1.1:
 #
@@ -23,15 +25,16 @@
 #   SoC. They halt/resume the U74 harts and leave the loaded image in place.
 #   A real board reset needs one of:
 #
-#     RESET=wdt    (default) the JH7110 watchdog, armed over JTAG with
-#                  jh7110_wdt_reset.cfg, disarmed after the reboot with
-#                  jh7110_wdt_disable.cfg. No wire needed.
+#     RESET=wdt    soft reset through the JH7110 watchdog, no pin needed.
+#                  This is the default. It arms the watchdog from JTAG, lets
+#                  it reset the SoC, then tries to disarm it after U-Boot is
+#                  back (the WDT is in the always-on domain).
 #
 #     RESET=srst   the probe's RST/SRST wired to 40-pin header pin 36
 #                  (GND to pin 39). Uses jh7110_daplink_srst.cfg.
 #
-#     RESET=power  no wire: this script just sends the key stream; you
-#                  power-cycle the board (or press an external reset button).
+#     RESET=power  no reset source: this script just sends the key stream;
+#                  you power-cycle the board (or press an external reset).
 #
 #     RESET=halt   only for testing: reset halt + resume through the RISC-V
 #     RESET=run    DM; on this board it does not restart U-Boot.
@@ -46,13 +49,13 @@ SERIAL="${1:-/dev/ttyUSB0}"
 RESET="${RESET:-wdt}"
 SECS="${2:-}"
 if [[ -z "$SECS" ]]; then
-  if [[ "$RESET" == wdt ]]; then SECS=60; else SECS=15; fi
+  if [[ "$RESET" == wdt || "$RESET" == soft ]]; then SECS=10; else SECS=15; fi
 fi
 BAUD="${BAUD:-115200}"
 KEY="${KEY:-\r}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJ="${PROJ:-$HERE}"   # the cfgs sit beside this script (repo root)
+PROJ="${PROJ:-$HERE}"   # the jh7110_*.cfg files sit beside this script
 CFG_MAIN="${CFG_MAIN:-$PROJ/jh7110_daplink.cfg}"
 CFG_SRST="${CFG_SRST:-$PROJ/jh7110_daplink_srst.cfg}"
 CFG_WDT="${CFG_WDT:-$PROJ/jh7110_wdt_reset.cfg}"
@@ -60,11 +63,11 @@ CFG_WDT_OFF="${CFG_WDT_OFF:-$PROJ/jh7110_wdt_disable.cfg}"
 CFG="${CFG:-}"
 
 case "$RESET" in
-  wdt)       [[ -n "$CFG" ]] || CFG="$CFG_WDT" ;;
-  srst|run)  [[ -n "$CFG" ]] || CFG="$CFG_SRST" ;;
-  halt)      [[ -n "$CFG" ]] || CFG="$CFG_MAIN" ;;
+  wdt|soft)   [[ -n "$CFG" ]] || CFG="$CFG_WDT" ;;
+  srst|run)   [[ -n "$CFG" ]] || CFG="$CFG_SRST" ;;
+  halt)       [[ -n "$CFG" ]] || CFG="$CFG_MAIN" ;;
   power|none) ;;
-  *) echo "vf2-reset-to-uboot: RESET must be wdt, srst, power, halt or run" >&2; exit 2 ;;
+  *) echo "vf2-reset-to-uboot: RESET must be wdt/soft, srst, power, halt or run" >&2; exit 2 ;;
 esac
 
 OCD="${OPENOCD:-$(ls -d "$HOME"/.local/xPacks/@xpack-dev-tools/openocd/*/.content/bin/openocd 2>/dev/null | sort -V | tail -1)}"
@@ -76,10 +79,16 @@ fi
 
 die () { echo "vf2-reset-to-uboot: $*" >&2; exit 1; }
 
-[[ -e "$SERIAL" ]] || die "no such serial device: $SERIAL"
+[[ -e "$SERIAL" ]] || die "no such serial device: $SERIAL (for UART-less operation use $HERE/vf2-jtag-stop-uboot.sh)"
 [[ "$SECS" =~ ^[0-9]+$ ]] || die "seconds must be a number"
 if [[ "$RESET" != power && "$RESET" != none ]]; then
   [[ -f "$CFG" ]] || die "no such OpenOCD config: $CFG"
+  # Fail fast instead of sending 10 s of keys to a probe that is not there.
+  if command -v lsusb >/dev/null 2>&1; then
+    if ! lsusb | grep -qiE '0d28:0204|d6e7:3507'; then
+      die "no CMSIS-DAP probe in lsusb (0d28:0204 / d6e7:3507); replug the DAPLink"
+    fi
+  fi
 fi
 
 if command -v fuser >/dev/null 2>&1; then
@@ -94,30 +103,46 @@ stty -F "$SERIAL" "$BAUD" raw -echo -echoe -echok -echoctl -echoke \
   clocal -crtscts 2>/dev/null \
   || die "cannot configure $SERIAL (permissions? close the terminal?)"
 
-echo "reset-to-uboot: sending keys on $SERIAL for ${SECS}s"
+echo "reset-to-uboot: starting the key stream on $SERIAL"
+KEY_STOP="$(mktemp -t vf2-keys.XXXXXX)"
+rm -f "$KEY_STOP"
 (
-  end=$((SECONDS + SECS))
-  while (( SECONDS < end )); do
+  while [[ ! -e "$KEY_STOP" ]]; do
     printf '%b' "$KEY" > "$SERIAL" 2>/dev/null || break
     sleep 0.05
   done
 ) &
 KEY_PID=$!
 
+stop_keys () {
+  touch "$KEY_STOP" 2>/dev/null || true
+  wait "$KEY_PID" 2>/dev/null || true
+  rm -f "$KEY_STOP"
+}
+
 sleep 0.2
 
 case "$RESET" in
-  wdt)
-    echo "reset-to-uboot: watchdog reset (no reset pin needed)"
+  wdt|soft)
+    echo "reset-to-uboot: watchdog soft reset (no reset pin needed)"
     echo "                cfg $CFG"
-    "$OCD" "${SCRIPTS_ARG[@]}" -f "$CFG"
-    rc=$?
+    WDT_LOG="$(mktemp -t vf2-wdt.XXXXXX)"
+    "$OCD" "${SCRIPTS_ARG[@]}" -f "$CFG" 2>&1 | tee "$WDT_LOG"
+    rc=${PIPESTATUS[0]}
+    if (( rc == 0 )) && ! grep -q "watchdog armed" "$WDT_LOG"; then
+      echo "reset-to-uboot: the watchdog was NOT armed (JTAG problem?)." >&2
+      echo "                If Linux owns the JTAG pins, power-cycle first and" >&2
+      echo "                use RESET=power for the next attempt." >&2
+      rc=1
+    fi
+    rm -f "$WDT_LOG"
     if (( rc == 0 )); then
-      # The WDT is in the always-on domain; after the reset it may still be
-      # running. Wait past the first timeout, then disarm it once U-Boot/JTAG
-      # is back. Retry because the board may still be booting.
-      echo "reset-to-uboot: waiting for the reset, then disarming the WDT..."
-      sleep 25
+      # Keep the keys flowing through the watchdog reset and U-Boot's
+      # countdown. Only then stop and disarm the always-on watchdog.
+      echo "reset-to-uboot: reset armed; keeping keys for ${WDT_WAIT:-10}s"
+      sleep "${WDT_WAIT:-10}"
+      stop_keys
+      echo "reset-to-uboot: disarming the WDT..."
       for _try in $(seq 1 15); do
         if "$OCD" "${SCRIPTS_ARG[@]}" -f "$CFG_WDT_OFF" >/dev/null 2>&1; then
           echo "reset-to-uboot: WDT disabled"
@@ -125,6 +150,8 @@ case "$RESET" in
         fi
         sleep 2
       done
+    else
+      stop_keys
     fi
     ;;
   srst|run)
@@ -135,6 +162,8 @@ case "$RESET" in
       -c 'reset run' \
       -c 'shutdown'
     rc=$?
+    sleep "$SECS"
+    stop_keys
     ;;
   halt)
     echo "reset-to-uboot: reset halt + resume through the RISC-V DM"
@@ -145,15 +174,17 @@ case "$RESET" in
       -c 'resume' \
       -c 'shutdown'
     rc=$?
+    sleep "$SECS"
+    stop_keys
     ;;
   power|none)
     echo "reset-to-uboot: no OpenOCD reset -- power-cycle / press RESET now."
     echo "                keys are already flowing; you have ${SECS}s."
     rc=0
+    sleep "$SECS"
+    stop_keys
     ;;
 esac
-
-wait "$KEY_PID" 2>/dev/null || true
 
 if (( rc != 0 )); then
   echo "vf2-reset-to-uboot: OpenOCD returned $rc" >&2
@@ -162,7 +193,7 @@ fi
 
 echo
 echo "done. Check the serial terminal for the 'StarFive #' prompt."
-if [[ "$RESET" == wdt ]]; then
+if [[ "$RESET" == wdt || "$RESET" == soft ]]; then
   echo "If the board kept resetting: run"
   echo "  openocd -f $CFG_WDT_OFF"
   echo "or power-cycle it."

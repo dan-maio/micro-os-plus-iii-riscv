@@ -316,7 +316,7 @@ everything below was measured on the board (2026-11-06).
 | session | `init` -> halt harts 2, 3, 4, 1 -> `load_image` -> for each hart the image drives: `reg priv 3`, park, resume, 100 ms, halt, `arm semihosting enable` -> (SMP) clear the release slots, `reg pc <entry>; resume` on harts 2..n (they park) -> `reg pc <entry>; resume` on hart 1. The verdict is the semihosting exit (OpenOCD's exit status) checked against the `RESULT` line |
 | SMP images | detected from `riscv_secondary_boot` (NCPU = its size / 24). Its slots are **cleared through OpenOCD** before the harts start: the DDR keeps the previous run's, and a stale magic would release a hart before CPU 0 has set it up. Semihosting is enabled on every target: threads on any core print, and each hart halts on its own ebreak |
 | diagnostics | every run keeps a timestamped log in `test/build-vf2/.hw-logs/`; on a timeout `hw.sh` asks the live OpenOCD (Tcl port 6666) for hart 1's `pc mcause mepc mtval ra sp mstatus dcsr` and the port's `riscv_semihosting_absent` before stopping it |
-| wiring | 40-pin header: TMS 35, TCK 37, TDI 38, TDO 40, GND 39 (pin 36 = reset, not used); console UART0 TX pin 8, RX pin 10 |
+| wiring | 40-pin header: TMS 35, TCK 37, TDI 38, TDO 40, GND 39 (pin 36 = GPIO36, not reset, not used); console UART0 TX pin 8, RX pin 10 |
 
 ## Build and test
 

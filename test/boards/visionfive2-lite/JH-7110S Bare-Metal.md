@@ -79,7 +79,7 @@ The VisionFive 2 exposes JTAG on the 40-pin GPIO header.
 • TDO: Pin 40 (GPIO 44)
 • TCK: Pin 37 (GPIO 60)
 • TMS: Pin 35 (GPIO 63)
-• RST: Pin 36 (GPIO 36)
+• Pin 36: GPIO 36 — not reset; do not connect probe RST here
 • GND: Pin 39 (or any ground)
 Note: You may need to ensure your "bare metal" code (or the SPL) does not reconfigure these pins as GPIOs if you intend to attach the debugger after boot.
 
@@ -111,7 +111,7 @@ JTAG (Debugger Connection)
 
 Connect your OpenOCD/JTAG debugger probe to the bottom right segment of the header: [1] (https://www.waveshare.com/wiki/VisionFive2-Lite?srsltid=AYCX9vLnaZKwJUO2UmJ0BTM9L9303sHiBBl8gtJBbTRcxtAwHoGGfefj), [2] (https://github.com/probe-rs/probe-rs/issues/1852)
 • Pin 35: TMS (GPIO 63)
-• Pin 36: RST (GPIO 36)
+• Pin 36: GPIO 36 — not reset (the Lite has no reset button)
 • Pin 37: TCK (GPIO 60)
 • Pin 38: TDI (GPIO 61)
 • Pin 40: TDO (GPIO 44)
