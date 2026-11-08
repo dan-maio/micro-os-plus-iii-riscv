@@ -4,7 +4,7 @@
 **Loader:** xfel over the USB-C **OTG** FEL port; image at `0x40000000`  
 **Console:** UART0, PB8 = TX / PB9 = RX, 115200 8N1 — left entirely to the user  
 **Port id:** `mangopi-mq-pro` (`-DBOARD=mangopi-mq-pro`)  
-**Result:** hardware **10/10 PASS** (xfel only), QEMU virt **11/11 PASS**
+**Result:** hardware **10/10 port + 6/6 harness PASS** (xfel only); QEMU **11/11 port + 6/6 harness PASS**
 
 ---
 
@@ -200,6 +200,20 @@ The UART is purely for the user: the hardware verdict does not depend on it.
 The same ten applications plus `semihosting-test`, which is QEMU-only because
 the hardware setup has no debugger to service semihosting.
 
+### Harness suites — 6/6 QEMU, 6/6 hardware
+
+Built by the kernel harness platform `tests/platforms/riscv-mangopi-mq-pro`
+(see section 10), and run on hardware through the same xfel-only `hw.sh`.
+
+| Suite | QEMU | Hardware (xfel) |
+|---|---|---|
+| blinky | PASS | PASS |
+| fp-switch | PASS | PASS |
+| mutex-stress | PASS | PASS (38.6 s) |
+| instrumentation | PASS | PASS |
+| rtos-apis | PASS | PASS |
+| cmsis-os-validator | PASS | PASS |
+
 ---
 
 ## 9. Test adaptations
@@ -215,13 +229,39 @@ the hardware setup has no debugger to service semihosting.
 
 ---
 
-## 10. Harness suites and what is not ported
+## 10. Harness suites
 
-The six harness-suite directories (`blinky`, `fp-switch`, `mutex-stress`,
-`instrumentation`, `rtos-apis`, `cmsis-os-validator`) are placeholders. They
-are built by the kernel harness (`micro-os-plus-iii/tests/`), which needs a
-`tests/platforms/riscv-mangopi-mq-pro/` platform; that lives outside this port
-repository.
+The six suites (`blinky`, `fp-switch`, `mutex-stress`, `instrumentation`,
+`rtos-apis`, `cmsis-os-validator`) are built by the kernel harness. Added:
+
+```text
+micro-os-plus-iii/tests/platforms/riscv-mangopi-mq-pro/
+  CMakeLists.txt
+  cmake/{definitions,platform-library,dependencies-folders}.cmake
+  include/cmsis-plus/platform.h
+  include/blink-led.h
+
+micro-os-plus-iii/tests/package.json
+  riscv-mangopi-mq-pro-cmake-gcc-debug
+  riscv-mangopi-mq-pro-cmake-gcc-release
+```
+
+The platform honours the port's `BOARD_TEST_QEMU_ONLY` / `BOARD_TEST_HWD_ONLY`
+lists, so `semihosting-test` is registered for QEMU only. Hardware runs use the
+port's xfel-only `hw.sh` and the RTC verdict; UART is never opened.
+
+```sh
+cd micro-os-plus-iii/tests
+xpm run install --config riscv-mangopi-mq-pro-cmake-gcc-debug
+xpm run prepare --config riscv-mangopi-mq-pro-cmake-gcc-debug
+xpm run build   --config riscv-mangopi-mq-pro-cmake-gcc-debug
+
+# all QEMU cases (port tests + harness suites)
+xpm run test --config riscv-mangopi-mq-pro-cmake-gcc-debug
+
+# one hardware harness suite at a time
+xpm run test-blinky-hwd --config riscv-mangopi-mq-pro-cmake-gcc-debug
+```
 
 Not ported: `smp-test-nested` (CV1800B PLIC/DW timers/UART4) and the TinyUSB
 CDC/HID tests. The D1 has a different timer/PLIC layout and this port has no
@@ -246,4 +286,10 @@ BUILD=test/build-mangopi-mq-pro test/boards/mangopi-mq-pro/hw.sh smp_test0
 
 # hardware, list
 BUILD=test/build-mangopi-mq-pro test/boards/mangopi-mq-pro/hw.sh list
+
+# harness suites (kernel tests/ tree)
+cd micro-os-plus-iii/tests
+xpm run build --config riscv-mangopi-mq-pro-cmake-gcc-debug
+xpm run test --config riscv-mangopi-mq-pro-cmake-gcc-debug
+xpm run test-blinky-hwd --config riscv-mangopi-mq-pro-cmake-gcc-debug
 ```

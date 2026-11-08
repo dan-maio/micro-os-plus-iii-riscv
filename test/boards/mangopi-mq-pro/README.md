@@ -107,7 +107,7 @@ BUILD=test/build-mangopi-mq-pro \
   `test/mangopi-mq-pro/tests.cmake`): this setup has no debugger to service
   semihosting.
 - The six harness suites (blinky, fp-switch, mutex-stress, instrumentation,
-  rtos-apis, cmsis-os-validator) are present as placeholders. They are built
-  by the kernel's harness (`micro-os-plus-iii/tests/`), which needs a
-  `tests/platforms/riscv-mangopi-mq-pro/` platform; that is outside this
-  port repository.
+  rtos-apis, cmsis-os-validator) are built by the kernel harness platform
+  `micro-os-plus-iii/tests/platforms/riscv-mangopi-mq-pro/` with the
+  `riscv-mangopi-mq-pro-cmake-gcc-debug` / `-release` xpm configs. All six
+  pass on QEMU and on hardware through the same xfel-only `hw.sh`.

@@ -61,8 +61,31 @@ test at a time, with the UART free for your terminal.
   resets; under QEMU it uses semihosting.
 - The six harness-suite directories (`blinky`, `fp-switch`,
   `mutex-stress`, `instrumentation`, `rtos-apis`, `cmsis-os-validator`) are
-  names for the kernel harness suites; they need
-  `micro-os-plus-iii/tests/platforms/riscv-mangopi-mq-pro/` to be built.
+  built by the kernel harness platform
+  `micro-os-plus-iii/tests/platforms/riscv-mangopi-mq-pro/`.
+
+## Harness suites
+
+All six harness suites pass on QEMU and on hardware (xfel only, UART
+untouched):
+
+| Suite | QEMU | Hardware |
+|---|---|---|
+| blinky | PASS | PASS |
+| fp-switch | PASS | PASS |
+| mutex-stress | PASS | PASS |
+| instrumentation | PASS | PASS |
+| rtos-apis | PASS | PASS |
+| cmsis-os-validator | PASS | PASS |
+
+```sh
+cd micro-os-plus-iii/tests
+xpm run install --config riscv-mangopi-mq-pro-cmake-gcc-debug
+xpm run prepare --config riscv-mangopi-mq-pro-cmake-gcc-debug
+xpm run build   --config riscv-mangopi-mq-pro-cmake-gcc-debug
+xpm run test    --config riscv-mangopi-mq-pro-cmake-gcc-debug
+xpm run test-blinky-hwd --config riscv-mangopi-mq-pro-cmake-gcc-debug
+```
 
 ## Not ported
 
