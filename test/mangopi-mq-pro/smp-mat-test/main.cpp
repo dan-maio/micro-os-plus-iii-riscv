@@ -175,8 +175,14 @@ namespace
 // ----------------------------------------------------------------------------
 // Solver dimensions
 // ----------------------------------------------------------------------------
-#define N 300
-#define B 50
+#ifndef SMP_MAT_N
+#define SMP_MAT_N 300
+#endif
+#ifndef SMP_MAT_B
+#define SMP_MAT_B 50
+#endif
+#define N SMP_MAT_N
+#define B SMP_MAT_B
 
 // ----------------------------------------------------------------------------
 // Generation-based spin barrier, protected by an AMO spinlock.

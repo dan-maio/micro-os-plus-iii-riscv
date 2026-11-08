@@ -106,6 +106,8 @@ BUILD=test/build-mangopi-mq-pro \
 - `semihosting-test` is **QEMU-only** (`BOARD_TEST_QEMU_ONLY` in
   `test/mangopi-mq-pro/tests.cmake`): this setup has no debugger to service
   semihosting.
+- `smp-mat-test` uses N=320, B=40 (`SMP_MAT_N` / `SMP_MAT_B`; 8 row blocks)
+  and passes on the single C906 hart.
 - The six harness suites (blinky, fp-switch, mutex-stress, instrumentation,
   rtos-apis, cmsis-os-validator) are built by the kernel harness platform
   `micro-os-plus-iii/tests/platforms/riscv-mangopi-mq-pro/` with the

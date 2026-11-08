@@ -130,7 +130,11 @@ function (board_test_defines _app _out)
 endfunction ()
 
 function (board_test_options _app _out)
-  if ("${_app}" IN_LIST _vf2_no_autostart)
+  if ("${_app}" STREQUAL "smp-mat-test")
+    # The RP2350B-sized problem on the four U74s: N=320, B=40 -> 8 row
+    # blocks, two per core (a multiple of OS_NCPU=4).
+    set (${_out} -DSMP_MAT_N=320 -DSMP_MAT_B=40 PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_no_autostart)
     set (${_out} "" PARENT_SCOPE)
   else ()
     set (${_out} -Dos_main=vf2_test_os_main PARENT_SCOPE)

@@ -191,7 +191,7 @@ The UART is purely for the user: the hardware verdict does not depend on it.
 | 5 | mos-test1 | PASS |
 | 6 | mutex-ceiling-test | PASS |
 | 7 | sc-test-ko | PASS |
-| 8 | smp-mat-test | PASS |
+| 8 | smp-mat-test (N=320/B=40) | PASS |
 | 9 | smp_test0 | PASS |
 | 10 | smp-test1 | PASS |
 
@@ -224,6 +224,9 @@ Built by the kernel harness platform `tests/platforms/riscv-mangopi-mq-pro`
 - **`hw_result.hpp`**: shadows the kernel's header. On `QEMU_BUILD` it uses
   semihosting; on hardware it prints the RESULT line to UART, writes the RTC
   verdict and resets.
+- **`smp-mat-test`**: N/B are `SMP_MAT_N` / `SMP_MAT_B`; this board's
+  `tests.cmake` builds it with N=320, B=40 (8 row blocks, single hart), and
+  the hardware run at that size passed.
 - The test sources are the portable RISC-V set of the Milk-V Duo; the board
   banner comes from `test/boards/mangopi-mq-pro/include/uart.hpp`.
 

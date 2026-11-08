@@ -59,6 +59,8 @@ test at a time, with the UART free for your terminal.
 - `hw_result.hpp` (in `test/mangopi-mq-pro/include/`) shadows the kernel's:
   on hardware it prints the RESULT line to UART, writes the RTC verdict and
   resets; under QEMU it uses semihosting.
+- `smp-mat-test`: N/B are `SMP_MAT_N` / `SMP_MAT_B`; the MQ-Pro build uses
+  N=320, B=40 (8 row blocks, single hart) and passes on hardware.
 - The six harness-suite directories (`blinky`, `fp-switch`,
   `mutex-stress`, `instrumentation`, `rtos-apis`, `cmsis-os-validator`) are
   built by the kernel harness platform

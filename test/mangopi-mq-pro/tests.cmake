@@ -54,3 +54,13 @@ function (board_test_libs _app _out)
     set (${_out} "" PARENT_SCOPE)
   endif ()
 endfunction ()
+
+# The single-hart smp-mat run with the requested problem size: 8 row blocks
+# of 40 (N/B = 8, a multiple of OS_NCPU=1).
+function (board_test_options _app _out)
+  if ("${_app}" STREQUAL "smp-mat-test")
+    set (${_out} -DSMP_MAT_N=320 -DSMP_MAT_B=40 PARENT_SCOPE)
+  else ()
+    set (${_out} "" PARENT_SCOPE)
+  endif ()
+endfunction ()

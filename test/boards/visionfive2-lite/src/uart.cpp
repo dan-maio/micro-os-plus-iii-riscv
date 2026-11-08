@@ -59,20 +59,44 @@ namespace
   }
 
 #if defined(HW_BUILD) && defined(SEMIHOST)
-  // Copy to semihosting with SYS_WRITE (buffer + length): OpenOCD fetches
-  // the whole buffer in one memory read. SYS_WRITE0 makes it read the
-  // string one byte per probe round trip, and on this board's probe
-  // (DAPLink CMSIS-DAP fw 0255, HID, USB full speed) that traffic killed the
-  // JTAG link mid-run twice (2026-11-06: a DMI timeout after 9 bytes, then
-  // CMD_DAP_JTAG_SEQ failed after ~200 bytes), while the same image without
-  // semihosting ran clean and the probe stayed enumerated.
+  // Only the verdict crosses JTAG.  Copying every console write to
+  // semihosting made a 36 ms/142 ms solver take 49 s: the test prints 32
+  // matrix lines, each built from many small writes, and each semihosting
+  // call halts the hart for a probe round trip.  The Pico 2 board already
+  // does this (test/boards/pico2/src/uart.cpp); the VF2 did not.
+  bool
+  has_verdict (const char* s, std::size_t n)
+  {
+    static constexpr char key[] = "RESULT:";
+    constexpr std::size_t k = sizeof (key) - 1;
+    for (std::size_t i = 0; i + k <= n; ++i)
+      {
+        std::size_t j = 0;
+        while (j < k && s[i + j] == key[j])
+          {
+            ++j;
+          }
+        if (j == k)
+          {
+            return true;
+          }
+      }
+    return false;
+  }
+
+  // SYS_WRITE (buffer + length): OpenOCD fetches the whole buffer in one
+  // memory read.  SYS_WRITE0 makes it read the string one byte per probe
+  // round trip; on this board's DAPLink (CMSIS-DAP fw 0255, HID, USB full
+  // speed) that traffic killed the JTAG link mid-run twice.  Keep SYS_WRITE,
+  // but only for the RESULT line.
   // Not from a trap: each semihosting call halts the hart for a JTAG round
-  // trip, far longer than a tick. Output written by a handler (a timer
+  // trip, far longer than a tick.  Output written by a handler (a timer
   // callback's printf) goes to the UART only.
   void
   semi_copy (const char* s, std::size_t n)
   {
-    if (n == 0 || !semihosting::attached () || riscv::in_trap ())
+    if (n == 0 || !semihosting::attached () || riscv::in_trap ()
+        || !has_verdict (s, n))
       {
         return;
       }

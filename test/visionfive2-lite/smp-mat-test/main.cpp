@@ -207,10 +207,17 @@ namespace
 }
 
 // ----------------------------------------------------------------------------
-// Solver dimensions
+// Solver dimensions.  The board's tests.cmake may override them; this VF2
+// build uses N = 320, B = 40: 8 row blocks, two per U74 core.
 // ----------------------------------------------------------------------------
-#define N 240 // 8 row blocks of 30: two per core (and a multiple of 1)
-#define B 30  // N must be a multiple of B, N/B a multiple of OS_NCPU
+#ifndef SMP_MAT_N
+#define SMP_MAT_N 240
+#endif
+#ifndef SMP_MAT_B
+#define SMP_MAT_B 30
+#endif
+#define N SMP_MAT_N
+#define B SMP_MAT_B
 
 // ----------------------------------------------------------------------------
 // Generation-based spin barrier, protected by an AMO spinlock.
