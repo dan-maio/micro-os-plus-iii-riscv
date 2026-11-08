@@ -49,6 +49,11 @@ extern "C"
   {
   }
 
+  // A board without a debugger ends a failed run its own way (the MangoPi
+  // MQ-Pro writes the verdict to the RTC and resets).  Weak: no change for
+  // boards that do not define it.
+  void riscv_board_exit (int code) __attribute__ ((weak));
+
 #if defined(RISCV_PFIC)
   // A PFIC peripheral interrupt (16 and up). The board's handlers; one the
   // board does not handle is disabled, so it cannot trap again forever.
@@ -150,6 +155,14 @@ namespace
         }
     }
     raw ("\r\nRESULT: FAIL (trap)\r\n");
+
+    // A board whose runner cannot see semihosting records the failure and
+    // resets here; the semihosting report below is for the boards that can.
+    if (riscv_board_exit != nullptr)
+      {
+        riscv_board_exit (1);
+      }
+
     // The same facts on the semihosting channel, so the runner's log says
     // which trap it was (the console is the board's UART); then the verdict,
     // then SYS_EXIT stops the run (without a debugger, exit_failure() spins).

@@ -18,9 +18,18 @@
 
 extern "C" void _Exit (int code) __attribute__ ((noreturn));
 
+// A board without a debugger (the MangoPi MQ-Pro runs under xfel) ends the
+// run its own way: write the verdict where the host can read it after the
+// reset, then reset.  Weak, so every other board keeps the semihosting path.
+extern "C" void riscv_board_exit (int code) __attribute__ ((weak));
+
 extern "C" void
 _Exit (int code)
 {
+  if (riscv_board_exit != nullptr)
+    {
+      riscv_board_exit (code);
+    }
 #if defined(SEMIHOST)
   if (code == 0)
     {

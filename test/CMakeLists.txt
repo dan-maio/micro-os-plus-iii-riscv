@@ -88,6 +88,11 @@ set (BOARD_TEST_NO_KERNEL "")
 # emulated and says so per test here, rather than dropping the whole board
 # from the emulator.
 set (BOARD_TEST_HWD_ONLY "")
+# Tests that only make sense where a debugger/emulator exists: they get NO
+# `hwd` image even on a board that has a hardware linker.  A board with no
+# JTAG probe (the MangoPi MQ-Pro runs under xfel) says so here rather than
+# carrying a semihosting test its runner cannot service.
+set (BOARD_TEST_QEMU_ONLY "")
 function (board_test_defines _app _out)
   set (${_out} "" PARENT_SCOPE)
 endfunction ()
@@ -262,6 +267,9 @@ foreach (_dir IN LISTS _test_dirs)
   if ("${_app}" IN_LIST BOARD_TEST_HWD_ONLY)
     set (_app_variants hwd)
   endif ()
+  if ("${_app}" IN_LIST BOARD_TEST_QEMU_ONLY)
+    set (_app_variants qemu)
+  endif ()
 
   foreach (_variant IN LISTS _app_variants)
     set (_variant_libs ${_libs})
@@ -362,6 +370,9 @@ foreach (_app IN LISTS _apps)
   set (_app_variants ${_variants})
   if ("${_app}" IN_LIST BOARD_TEST_HWD_ONLY)
     set (_app_variants hwd)
+  endif ()
+  if ("${_app}" IN_LIST BOARD_TEST_QEMU_ONLY)
+    set (_app_variants qemu)
   endif ()
   foreach (_variant IN LISTS _app_variants)
     if (_variant STREQUAL "qemu")
