@@ -278,6 +278,12 @@ reset!`), so the verdict is the `RESULT` line on the UART, not `hw.sh`'s exit.
 
 ## StarFive VisionFive 2 Lite (test/boards/visionfive2-lite)
 
+The Ethernet + USB-CDC test (`smp-test-usb-cdc-net`, seven threads on the four
+U74s, a DesignWare GMAC 5.20 driver and lwIP) is documented separately, with
+its measured register-level status and the one open bring-up item:
+**[visionfive2-lite-net.md](visionfive2-lite-net.md)**
+(**[PDF](visionfive2-lite-net.pdf)**).
+
 JH-7110S: a U74-MC complex -- hart 0 is the S7 monitor core (rv64imac, no
 MMU, not used), harts 1..4 are SiFive U74 (`rv64imafdc_zba_zbb`, Sv39).
 µOS++ runs in M-mode on **all four U74** in **every** test (`OS_NCPU = 4`,

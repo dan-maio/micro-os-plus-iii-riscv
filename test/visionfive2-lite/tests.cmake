@@ -88,8 +88,30 @@ set (_vf2_usb_cdc_raw_tests smp-test-usb-cdc-file)
 # USB file round trip through a FAT file on the eMMC: USB + FatFs.
 set (_vf2_usb_fs_tests smp-test-usb-cdc-file-fs)
 
+# USB CDC console *and* a real network: TinyUSB + GMAC0 + lwIP over it.
+set (_vf2_usb_net_tests smp-test-usb-cdc-net)
+set (_vf2_net_dir "${CMAKE_CURRENT_LIST_DIR}/../boards/visionfive2-lite/net")
+set (_vf2_lwip_dir "${CMAKE_CURRENT_LIST_DIR}/../third_party/lwip")
+
+set (NET_TEST_INHERIT_GMAC OFF CACHE BOOL
+     "smp-test-usb-cdc-net: use the GMAC bring-up U-Boot already did")
+set (NET_TEST_STAY_ALIVE OFF CACHE BOOL
+     "smp-test-usb-cdc-net: keep running after the verdict (JTAG bring-up)")
+set (NET_TEST_PEER "" CACHE STRING
+     "smp-test-usb-cdc-net: optional second host on the LAN to ping")
+
 function (board_test_sources _app _out)
-  if ("${_app}" IN_LIST _vf2_fatfs_tests)
+  if ("${_app}" IN_LIST _vf2_usb_net_tests)
+    file (GLOB _net_lwip CONFIGURE_DEPENDS
+          "${_vf2_lwip_dir}/src/core/*.c"
+          "${_vf2_lwip_dir}/src/core/ipv4/*.c"
+          "${_vf2_lwip_dir}/src/netif/*.c")
+    set (${_out}
+         ${UOS_BOARD_USB_CORE_SOURCES} ${UOS_BOARD_USB_CDC_SOURCES}
+         "${_vf2_net_dir}/gmac.cpp" "${_vf2_net_dir}/net-lwip.cpp"
+         ${_net_lwip}
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_fatfs_tests)
     set (${_out} "${_vf2_fatfs_dir}/source/ff.c" "${_vf2_fatfs_dir}/source/ffunicode.c"
          PARENT_SCOPE)
   elseif ("${_app}" IN_LIST _vf2_usb_cdc_tests)
@@ -108,7 +130,13 @@ function (board_test_sources _app _out)
 endfunction ()
 
 function (board_test_includes _app _out)
-  if ("${_app}" IN_LIST _vf2_fatfs_tests)
+  if ("${_app}" IN_LIST _vf2_usb_net_tests)
+    set (${_out}
+         ${UOS_BOARD_USB_CDC_INCLUDE} ${UOS_BOARD_USB_INCLUDE}
+         "${_vf2_net_dir}"
+         "${_vf2_lwip_dir}/src/include"
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_fatfs_tests)
     set (${_out} "${_vf2_fatfs_dir}/include" PARENT_SCOPE)
   elseif ("${_app}" IN_LIST _vf2_usb_cdc_tests OR "${_app}" IN_LIST _vf2_usb_cdc_raw_tests)
     set (${_out} ${UOS_BOARD_USB_CDC_INCLUDE} ${UOS_BOARD_USB_INCLUDE}
@@ -122,7 +150,16 @@ function (board_test_includes _app _out)
 endfunction ()
 
 function (board_test_defines _app _out)
-  if ("${_app}" IN_LIST _vf2_no_autostart)
+  if ("${_app}" IN_LIST _vf2_usb_net_tests)
+    set (_d VF2_SMP_AUTOSTART=1 "NET_TEST_PEER=\"${NET_TEST_PEER}\"")
+    if (NET_TEST_STAY_ALIVE)
+      list (APPEND _d NET_TEST_STAY_ALIVE=1)
+    endif ()
+    if (NET_TEST_INHERIT_GMAC)
+      list (APPEND _d NET_TEST_INHERIT_GMAC=1)
+    endif ()
+    set (${_out} ${_d} PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_no_autostart)
     set (${_out} "" PARENT_SCOPE)
   else ()
     set (${_out} VF2_SMP_AUTOSTART=1 PARENT_SCOPE)

@@ -64,9 +64,9 @@ function (board_test_sources _app _out)
           "${UOS_BOARD_SRC_DIR}/wifi/src/*.cpp"
           "${UOS_BOARD_SRC_DIR}/wifi/src/*.c"
           "${UOS_BOARD_SRC_DIR}/wifi/src/wifi/rtw/*.S"
-          "${UOS_BOARD_SRC_DIR}/wifi/lwip/src/core/*.c"
-          "${UOS_BOARD_SRC_DIR}/wifi/lwip/src/core/ipv4/*.c"
-          "${UOS_BOARD_SRC_DIR}/wifi/lwip/src/netif/*.c")
+          "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lwip/src/core/*.c"
+          "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lwip/src/core/ipv4/*.c"
+          "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lwip/src/netif/*.c")
     set (${_out} ${_wifi_sources} PARENT_SCOPE)
   else ()
     set (${_out} "" PARENT_SCOPE)
@@ -80,7 +80,7 @@ function (board_test_includes _app _out)
          "${UOS_BOARD_SRC_DIR}/wifi/src/net"
          "${UOS_BOARD_SRC_DIR}/wifi/src/wifi"
          "${UOS_BOARD_SRC_DIR}/wifi/src/wifi/rtw"
-         "${UOS_BOARD_SRC_DIR}/wifi/lwip/src/include"
+         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lwip/src/include"
          PARENT_SCOPE)
   else ()
     set (${_out} "" PARENT_SCOPE)
