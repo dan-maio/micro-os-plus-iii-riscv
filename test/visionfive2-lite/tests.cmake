@@ -100,8 +100,42 @@ set (NET_TEST_STAY_ALIVE OFF CACHE BOOL
 set (NET_TEST_PEER "" CACHE STRING
      "smp-test-usb-cdc-net: optional second host on the LAN to ping")
 
+# smp-wifi: the on-board AIC8800 Wi-Fi module on SDIO1 + lwIP.  Everything it
+# needs beyond the port lives in its own directory (the SDIO1 host, the chip
+# and 802.11 layers, the lwIP glue, the firmware blobs) -- not under
+# test/boards/visionfive2-lite/, whose sources every other test's image is
+# checked against (hw.sh refuses an image older than them).  Shared with the
+# rest of the tree: lwIP itself, this board's lwipopts.h / arch/cc.h, and the
+# MangoPi MQ-Pro's header-only WPA2 crypto.
+set (_vf2_wifi_tests smp-wifi)
+set (_vf2_wifi_dir "${CMAKE_CURRENT_LIST_DIR}/smp-wifi")
+set (_vf2_wifi_crypto_dir
+     "${CMAKE_CURRENT_LIST_DIR}/../boards/mangopi-mq-pro/wifi/src/wifi")
+
+# What smp-wifi associates with.  No credentials in the repository: pass them
+# on the cmake line (the same entries as the MangoPi MQ-Pro's wifi-net), e.g.
+#   -DWIFI_TEST_SSID=myssid -DWIFI_TEST_PASS=mypassphrase
+set (WIFI_TEST_SSID "" CACHE STRING "smp-wifi: SSID to join")
+set (WIFI_TEST_PASS "" CACHE STRING "smp-wifi: WPA2 passphrase (empty: open)")
+set (WIFI_TEST_GATEWAY "gw" CACHE STRING
+     "smp-wifi: what to ping (gw = the DHCP gateway, or a dotted address)")
+set (WIFI_TEST_PEER "" CACHE STRING "smp-wifi: optional second host to ping")
+
 function (board_test_sources _app _out)
-  if ("${_app}" IN_LIST _vf2_usb_net_tests)
+  if ("${_app}" IN_LIST _vf2_wifi_tests)
+    file (GLOB _wifi_lwip CONFIGURE_DEPENDS
+          "${_vf2_lwip_dir}/src/core/*.c"
+          "${_vf2_lwip_dir}/src/core/ipv4/*.c"
+          "${_vf2_lwip_dir}/src/netif/*.c")
+    set (${_out}
+         "${_vf2_wifi_dir}/wifi/sdio1.cpp"
+         "${_vf2_wifi_dir}/wifi/aic8800.cpp"
+         "${_vf2_wifi_dir}/wifi/aic8800-fw.S"
+         "${_vf2_wifi_dir}/wifi/wlan.cpp"
+         "${_vf2_wifi_dir}/net/wifi-lwip.cpp"
+         ${_wifi_lwip}
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_usb_net_tests)
     file (GLOB _net_lwip CONFIGURE_DEPENDS
           "${_vf2_lwip_dir}/src/core/*.c"
           "${_vf2_lwip_dir}/src/core/ipv4/*.c"
@@ -130,7 +164,13 @@ function (board_test_sources _app _out)
 endfunction ()
 
 function (board_test_includes _app _out)
-  if ("${_app}" IN_LIST _vf2_usb_net_tests)
+  if ("${_app}" IN_LIST _vf2_wifi_tests)
+    set (${_out}
+         "${_vf2_wifi_crypto_dir}"
+         "${_vf2_net_dir}"
+         "${_vf2_lwip_dir}/src/include"
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_usb_net_tests)
     set (${_out}
          ${UOS_BOARD_USB_CDC_INCLUDE} ${UOS_BOARD_USB_INCLUDE}
          "${_vf2_net_dir}"
@@ -150,7 +190,14 @@ function (board_test_includes _app _out)
 endfunction ()
 
 function (board_test_defines _app _out)
-  if ("${_app}" IN_LIST _vf2_usb_net_tests)
+  if ("${_app}" IN_LIST _vf2_wifi_tests)
+    set (${_out} VF2_SMP_AUTOSTART=1
+         "WIFI_TEST_SSID=\"${WIFI_TEST_SSID}\""
+         "WIFI_TEST_PASS=\"${WIFI_TEST_PASS}\""
+         "WIFI_TEST_GATEWAY=\"${WIFI_TEST_GATEWAY}\""
+         "WIFI_TEST_PEER=\"${WIFI_TEST_PEER}\""
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_usb_net_tests)
     set (_d VF2_SMP_AUTOSTART=1 "NET_TEST_PEER=\"${NET_TEST_PEER}\"")
     if (NET_TEST_STAY_ALIVE)
       list (APPEND _d NET_TEST_STAY_ALIVE=1)
