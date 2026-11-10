@@ -11,6 +11,7 @@
 
 #include <cstdint>
 
+#include <blackbox.hpp>
 #include <board.hpp>
 #include <riscv-board.hpp>
 #include <riscv-csr.hpp>
@@ -61,6 +62,7 @@ riscv_board_initialize_early (void)
 extern "C" void
 riscv_board_initialize (void)
 {
+  blackbox::reset ();
   uart::init (board::UART_BAUD);
 }
 

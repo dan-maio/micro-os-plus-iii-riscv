@@ -32,6 +32,10 @@
 #
 # Env:  BUILD=<dir>    the CMake build directory (default: test/build)
 #       SECS=<n>      per-test timeout (default: 180)
+#       NORESET=1     do not reset before the run: the board is already in FEL
+#                     (the BROM boots an inserted microSD card after a reset,
+#                     so a card-present test is started with NORESET=1 after
+#                     putting the board in FEL from the card's own image)
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
@@ -43,6 +47,15 @@ SECS="${SECS:-180}"
 RESULT_MAGIC=0x4d515052
 RESULT_REG=0x0709010C
 RESULT_CODE=0x07090110
+
+# The console log the test kept in RAM (see boards/<board>/include/blackbox.hpp):
+# magic 'BBLG', then length, then the text.  Read back over xfel -- the UART is
+# never opened.
+BLACKBOX_BASE=0x58000000
+BLACKBOX_MAX=65536
+# xfel takes plain addresses, so compute the header fields here.
+BLACKBOX_LEN_ADDR="$(printf '0x%08x' $((BLACKBOX_BASE + 4)))"
+BLACKBOX_TEXT_ADDR="$(printf '0x%08x' $((BLACKBOX_BASE + 16)))"
 
 wait_fel () {
   local n="${1:-60}"
@@ -106,12 +119,15 @@ EOF
   exit 2
 fi
 
-# Every test starts from a clean, xfel-reset system.
-timeout 5 xfel reset >/dev/null 2>&1 || true
-if ! wait_fel 60; then
-  echo "hw.sh: the board did not come back to FEL after xfel reset" >&2
-  echo "       (is the microSD card removed?)" >&2
-  exit 2
+# Every test starts from a clean, xfel-reset system -- unless NORESET=1, for a
+# board that must keep its microSD card (the BROM would boot it instead).
+if [[ "${NORESET:-0}" != "1" ]]; then
+  timeout 5 xfel reset >/dev/null 2>&1 || true
+  if ! wait_fel 60; then
+    echo "hw.sh: the board did not come back to FEL after xfel reset" >&2
+    echo "       (is the microSD card removed? use NORESET=1 to keep it)" >&2
+    exit 2
+  fi
 fi
 
 # Invalidate the verdict before the run.  After xfel reset, in case the BROM
@@ -165,6 +181,34 @@ fi
 magic="$(xfel read32 "$RESULT_REG" 2>/dev/null | tr -d '\r' | awk '{print $NF}')"
 code="$(xfel read32 "$RESULT_CODE" 2>/dev/null | tr -d '\r' | awk '{print $NF}')"
 
+# Dump the RAM console log, if the board kept one.  DDR must be initialised
+# again: the test's reset took the controller down with it.
+LOG_TEXT=""
+if xfel ddr d1 >/dev/null 2>&1; then
+  bb_magic="$(xfel read32 "$BLACKBOX_BASE" 2>/dev/null | tr -d '\r' | awk '{print $NF}')"
+  if [[ -n "$bb_magic" ]] && (( bb_magic == 0x42424C47 )); then
+    # The text is NUL-terminated as it is written, so cutting at the first NUL
+    # gives the whole log even if the header's length word is still dirty in
+    # the D-cache at reset time.
+    bb_file="$(mktemp)"
+    if xfel read "$BLACKBOX_TEXT_ADDR" "$BLACKBOX_MAX" "$bb_file" >/dev/null 2>&1; then
+      LOG_TEXT="$(python3 - "$bb_file" <<'PYEOF'
+import sys
+data = open(sys.argv[1], "rb").read()
+end = data.find(b"\0")
+if end < 0:
+    end = len(data)
+sys.stdout.write(data[:end].decode("utf-8", "replace").replace("\r", ""))
+PYEOF
+)"
+    fi
+    rm -f "$bb_file"
+    LOG_TEXT="${LOG_TEXT:-[blackbox: empty]}"
+  else
+    LOG_TEXT="[blackbox: no log (DDR did not keep it, or the image did not write one)]"
+  fi
+fi
+
 # Leave a clean FEL for the next test.
 timeout 5 xfel reset >/dev/null 2>&1 || true
 if ! wait_fel 60; then
@@ -198,4 +242,9 @@ else
 fi
 
 printf '%-24s %-20s\n' "$APP" "$result"
+if [[ -n "${LOG_TEXT:-}" ]]; then
+  echo "---- console log (from RAM, read over xfel) ----"
+  printf '%s\n' "$LOG_TEXT"
+  echo "---- end of log ----"
+fi
 exit "$rc"

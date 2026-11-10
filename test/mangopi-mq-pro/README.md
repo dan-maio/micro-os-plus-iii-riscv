@@ -10,15 +10,104 @@ is never opened by the runner.
 
 `clock-catchup`, `clock-test`, `exc-test`, `mmu-test`, `mos-test1`,
 `mutex-ceiling-test`, `sc-test-ko`, `smp-mat-test`, `smp_test0`,
-`smp-test1`.
+`smp-test1`, and **`wifi-net`** (below).
 
-All ten pass on the MQ-Pro.
+All eleven pass on the MQ-Pro.
 
 ## QEMU tests
 
 The same applications are also built for QEMU's virt machine (the D1 is not
 modelled); `semihosting-test` exists only there, because hardware has no
 debugger. All eleven QEMU cases pass.
+
+## wifi-net — the Wi-Fi stack on the scheduler
+
+`wifi-net` is the bare-metal RTL8723DS station and lwIP, re-hosted on
+µOS++. The driver code is the same one that works without an OS
+(`src/wifi/` of the MangoPi project, under
+`test/boards/mangopi-mq-pro/wifi/`); what this test adds is the
+concurrency: two threads, a shared console, and a poll cadence the radio
+can live with.
+
+| thread | priority | stack | period | what it owns |
+|---|---|---|---|---|
+| `net` | above normal | 32 KiB | 2 ms | SDC1 + the RTL8723DS, the 802.11 state machine, lwIP |
+| `sd` | normal | 8 KiB | 2 s | SDC0: card presence only |
+| `os_main` | normal | 8 KiB | — | starts both, waits for the verdict |
+
+The rules that make it work:
+
+- **One thread owns the radio.** The driver is a sequence of SDIO
+  transactions with no internal locking, and the blocking helpers
+  (`wlan::join`, `net::ping`) pump the radio themselves, so the script runs
+  on the radio thread rather than in `os_main`.
+- **2 ms poll.** A 1500-byte frame at 54 Mbit/s arrives in ~220 µs; 2 ms
+  keeps the chip's receive FIFO from wrapping during a burst and services
+  lwIP's timers well inside their 250 ms granularity, while the thread
+  sleeps 99 % of the time.
+- **`net` outranks `sd`.** An SD card identification attempt can spend
+  hundreds of milliseconds without a preemption point; the radio must keep
+  its cadence through that.
+- **SDC0 and SDC1 are separate controllers**, so the existence check cannot
+  disturb the radio. The one shared resource is the console, and it has one
+  writer: the SD thread records the card facts and the radio thread prints
+  them (`[SD] card present: ...`), which is why the card's message never
+  interleaves with a beacon log line. The thread prints **nothing** while no
+  card is present.
+- **`plat_delay_us()` sleeps.** Millisecond waits go through `sysclock`;
+  sub-millisecond waits stay busy-waits (SDIO timing).
+
+Build it with a network to join (no credentials live in the repository):
+
+```sh
+cmake -S . -B test/build-wifi -G Ninja \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-none-elf.cmake \
+      -DBOARD=mangopi-mq-pro \
+      -DWIFI_TEST_SSID=myssid -DWIFI_TEST_PASS=mypassphrase \
+      [-DWIFI_TEST_GATEWAY=192.168.1.1] [-DWIFI_TEST_PEER=192.168.1.73]
+cmake --build test/build-wifi --target wifi-net-hwd -j
+BUILD=test/build-wifi test/boards/mangopi-mq-pro/hw.sh wifi-net
+```
+
+Without `WIFI_TEST_SSID` the test still brings the radio up and scans, then
+fails the join step with that reason in the log.
+
+The verdict is PASS when the station joins, DHCP leases an address and an
+ICMP echo to the gateway is answered. Measured on the board (<SSID>,
+WPA2-PSK with a TKIP group key): radio bring-up ≈ 0.7 s, DHCP lease
+`192.168.1.9`, 4/4 echoes at 5–16 ms, `0 crc / 0 decrypt` errors.
+
+### Reading the console without the UART
+
+The runner never opens UART0, so the board keeps its console in a RAM ring
+(`include/blackbox.hpp`, at `board::SCRATCH_BASE`) and `hw.sh` reads it back
+over xfel after the verdict:
+
+```
+---- console log (from RAM, read over xfel) ----
+[WLAN] SDIO card 024c:d723, 1 function(s), ... 24000000 Hz 4-bit
+[SD] card present: 262144000 blocks (128000 MiB), 24000000 Hz, block addressing
+...
+[TEST] PASS: joined, leased, and the gateway answered
+---- end of log ----
+```
+
+The text is NUL-terminated as it is written: the last dirty cache line may
+never reach DDR before the reset, but a character and its terminator share the
+line, so the dump stops exactly at the end of the log — no cache flush and no
+uncached mapping are needed (an uncached alias would break `mmu-test`, which
+checks cache coherence between the identity map and an alias).
+
+### Keeping the microSD card inserted
+
+After a reset the BROM boots an inserted card, so `hw.sh` normally insists
+the card is out. To run with a card (the SD monitor then has something to
+report), put the board in FEL from the card's own image, then use
+`NORESET=1`:
+
+```sh
+BUILD=test/build-wifi NORESET=1 test/boards/mangopi-mq-pro/hw.sh wifi-net
+```
 
 ## Build
 

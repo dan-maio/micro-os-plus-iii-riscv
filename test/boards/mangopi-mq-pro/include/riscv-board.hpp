@@ -66,6 +66,7 @@ namespace riscv_board
   inline constexpr mmu::region MMU_REGIONS[] = {
     { 0x00000000u, 0x00200000u, FLAGS_DEV }, // BROM + SRAM A1
     { 0x02000000u, 0x01000000u, FLAGS_DEV }, // GPIO, CCU, UART0, TIMER
+    { 0x04000000u, 0x00200000u, FLAGS_DEV }, // SDC0 (card), SDC1 (SDIO Wi-Fi), USB0
     { 0x07000000u, 0x00200000u, FLAGS_DEV }, // RTC (efex), CPUX
     { 0x10000000u, 0x04000000u, FLAGS_DEV }, // PLIC
     { 0x14000000u, 0x00200000u, FLAGS_DEV }, // CLINT

@@ -65,8 +65,15 @@ test/boards/mangopi-mq-pro/
   qemu.sh                     QEMU-virt runner
   README.md
 
+test/boards/mangopi-mq-pro/
+  include/blackbox.hpp        RAM console log, read back over xfel
+  src/blackbox.cpp
+  wifi/                       the Wi-Fi stack: SDIO, rtw88 port, crypto,
+                              lwIP, the D1 SD-card driver (board support)
+
 test/mangopi-mq-pro/
   include/hw_result.hpp       hardware verdict/reset override
+  wifi-net/                   the Wi-Fi + lwIP + threads test
   include/harness-suite.hpp   harness-suite verdict wrapper
   tests.cmake                 QEMU stand-in, harness suites, QEMU-only test
   clock-catchup/ clock-test/ exc-test/ mmu-test/ mos-test1/
@@ -194,6 +201,7 @@ The UART is purely for the user: the hardware verdict does not depend on it.
 | 8 | smp-mat-test (N=320/B=40) | PASS |
 | 9 | smp_test0 | PASS |
 | 10 | smp-test1 | PASS |
+| 11 | wifi-net | PASS (RTL8723DS: join, DHCP, ICMP) |
 
 ### QEMU virt — 11/11 PASS
 
@@ -231,6 +239,77 @@ Built by the kernel harness platform `tests/platforms/riscv-mangopi-mq-pro`
   banner comes from `test/boards/mangopi-mq-pro/include/uart.hpp`.
 
 ---
+
+## 9a. The Wi-Fi test (`wifi-net`)
+
+`wifi-net` runs the bare-metal RTL8723DS station and lwIP on the scheduler.
+It is the same driver code as the standalone MangoPi application (kept under
+`test/boards/mangopi-mq-pro/wifi/`, board support rather than a test), with
+the concurrency added:
+
+| thread | priority | stack | period | role |
+|---|---|---|---|---|
+| `net` | above normal | 32 KiB | 2 ms | SDC1 + RTL8723DS + lwIP; runs the scripted bring-up, join, DHCP wait and ping |
+| `sd` | normal | 8 KiB | 2 s | SDC0 card-presence probe; prints only when a card is present |
+| `os_main` | normal | 8 KiB | — | starts both, waits for the verdict |
+
+Design rules that the port's scheduler imposes:
+
+- **One owner per peripheral.** The radio driver has no internal locking and
+  its blocking helpers (`wlan::join`, `net::ping`) pump the radio themselves,
+  so the whole script runs on the `net` thread; nothing else may call it.
+  SDC0 (the card) and SDC1 (the radio) are different controllers, so the SD
+  thread is safe alongside.
+- **One writer for the console.** The SD thread records the card facts and
+  the `net` thread prints them: a second writer interleaved mid-line
+  (`[SD] card present: 2621[RTW] firmware ...`) when both printed.
+- **The radio outranks the card.** A card identification attempt can run for
+  hundreds of milliseconds without a preemption point.
+- **`plat_delay_us()` is a scheduling point** for delays ≥ 1 ms
+  (`sysclock.sleep_for`), so bring-up and calibration do not block the SD
+  thread; sub-millisecond waits remain busy-waits (SDIO timing).
+
+Credentials are build options, never in the tree:
+
+```sh
+cmake -S . -B test/build-wifi -G Ninja \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-none-elf.cmake \
+      -DBOARD=mangopi-mq-pro -DWIFI_TEST_SSID=myssid -DWIFI_TEST_PASS=pass
+cmake --build test/build-wifi --target wifi-net-hwd -j
+BUILD=test/build-wifi test/boards/mangopi-mq-pro/hw.sh wifi-net
+```
+
+Verdict: PASS when the station joins, DHCP leases an address and the gateway
+answers an ICMP echo. Measured: 4/4 echo replies at 5–16 ms, 0 CRC and 0
+decrypt errors, DHCP lease `192.168.1.9`.
+
+### The RAM console log
+
+The runner never opens UART0, so every console character is also appended to
+a ring in DDR (`include/blackbox.hpp`) and `hw.sh` prints it after the
+verdict:
+
+```
+---- console log (from RAM, read over xfel) ----
+[WLAN] SDIO card 024c:d723, 1 function(s), ... 24000000 Hz 4-bit
+[SD] card present: 262144000 blocks (128000 MiB), 24000000 Hz, block addressing
+[NET] DHCP lease: address 192.168.1.9 mask 255.255.255.0 gateway 192.168.1.1
+[NET] ping: 4 sent, 4 received, 0% loss, rtt min/avg/max = 5.096/7.920/16.392 ms
+---- end of log ----
+```
+
+The text is NUL-terminated as it is written: the header word can still be in
+the D-cache when the test resets, but a character and its terminator share a
+cache line, so the dump is exact without a cache flush.
+
+One MMU fact was added for the Wi-Fi stack: the `0x04000000` window (SDC0,
+the microSD controller; SDC1, the RTL8723DS; USB0) is now mapped device.
+
+### Keeping the microSD card in
+
+After a reset the BROM boots an inserted card, so `hw.sh` normally wants it
+out. With a card in (the SD monitor then has something to say), put the board
+in FEL from the card's own image and run with `NORESET=1`.
 
 ## 10. Harness suites
 

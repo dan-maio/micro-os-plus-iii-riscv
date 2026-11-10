@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <blackbox.hpp>
 #include <uart.hpp>
 
 namespace
@@ -167,5 +168,9 @@ namespace uart
 extern "C" void
 riscv_board_console_write (const char* s, std::size_t n)
 {
+  for (std::size_t i = 0; i < n; ++i)
+    {
+      blackbox::put (s[i]);
+    }
   uart::write (s, n);
 }
