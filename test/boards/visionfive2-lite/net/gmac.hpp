@@ -30,6 +30,11 @@ namespace gmac
     unsigned speed_mbps{0};
   };
 
+  /// Where the bring-up log goes (the test installs its console writer).
+  using trace_fn = void (*) (const char* text);
+  void
+  set_trace (trace_fn fn);
+
   /// Reset and start the MAC and its DMA rings.  The module's clocks,
   /// resets, pinmux and RGMII delays are assumed to be as the boot chain
   /// left them (U-Boot enables GMAC0 for its own network use); the PHY is
@@ -70,6 +75,8 @@ namespace gmac
     std::uint32_t rx_dropped{0};
     std::uint32_t tx_busy{0};
     std::uint32_t phy_polls{0};
+    std::uint32_t tx_underflow{0}; // MTL TX FIFO underflow events
+    std::uint32_t rx_overflow{0};  // MTL RX FIFO dropped packets
   };
 
   [[nodiscard]] const counters&

@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <board.hpp>
 #include <uart.hpp>
 
 #if defined(HW_BUILD) && defined(SEMIHOST)
@@ -39,10 +40,19 @@ namespace
   void
   raw_put (char c)
   {
-    while ((reg (LSR) & LSR_THRE) == 0)
+    // Bounded wait: a test must not hang because nobody is draining the
+    // UART (a closed terminal, or the host not reading), but it must also not
+    // drop bytes while a terminal *is* reading: at 115200 baud a full 16-byte
+    // FIFO takes ~1.4 ms, so allow ~5 ms of polling before giving up on the
+    // byte.  The RAM log keeps the text either way.
+    for (unsigned i = 0; i < 500000u; ++i)
       {
+        if ((reg (LSR) & LSR_THRE) != 0)
+          {
+            reg (THR) = static_cast<std::uint8_t> (c);
+            return;
+          }
       }
-    reg (THR) = static_cast<std::uint8_t> (c);
   }
 
   void
@@ -145,5 +155,31 @@ namespace uart
 extern "C" void
 riscv_board_console_write (const char* s, std::size_t n)
 {
+  // If the running test claimed the RAM console log (magic 'VF2L' at
+  // board::SCRATCH_BASE), mirror everything the kernel's trace, the fault
+  // report and the test itself print into it.  The log is what a JTAG dump
+  // can read back; without the magic this is a plain UART write.
+  constexpr std::uintptr_t base = board::SCRATCH_BASE;
+  constexpr std::uint32_t magic = 0x5646324Cu; // "VF2L"
+  constexpr std::uint32_t capacity = 48u * 1024u;
+
+  auto& hdr_magic = *reinterpret_cast<volatile std::uint32_t*> (base);
+  auto& hdr_len = *reinterpret_cast<volatile std::uint32_t*> (base + 4u);
+  auto* text = reinterpret_cast<volatile char*> (base + 8u);
+
+  if (hdr_magic == magic)
+    {
+      for (std::size_t i = 0; i < n; ++i)
+        {
+          const std::uint32_t at = hdr_len;
+          if (at + 1u < capacity)
+            {
+              text[at] = s[i];
+              text[at + 1u] = '\0';
+              __asm__ volatile("" ::: "memory");
+              hdr_len = at + 1u;
+            }
+        }
+    }
   uart::write (s, n);
 }

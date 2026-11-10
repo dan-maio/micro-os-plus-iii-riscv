@@ -45,6 +45,16 @@ namespace
   constexpr u32 MAC_CONFIG_FES = 1u << 14;
   constexpr u32 MAC_CONFIG_PS = 1u << 15;
   constexpr u32 MAC_CONFIG_JD = 1u << 17;
+  // Linux's "default operating mode of the MAC" (dwmac4.h GMAC_CORE_INIT):
+  // port select (RGMII), packet burst enable, disable carrier sense during
+  // transmission, jabber enable+disable.  Leaving these clear is not a
+  // harmless difference: PS selects the RGMII port of the MAC.
+  constexpr u32 MAC_CONFIG_BE = 1u << 18;
+  constexpr u32 MAC_CONFIG_DCRS = 1u << 9;
+  constexpr u32 MAC_CONFIG_JE = 1u << 16;
+  // Measured on this board: PS (port select) must stay CLEAR -- setting it
+  // as Linux's GMAC_CORE_INIT does stops traffic completely.
+  constexpr u32 MAC_CORE_INIT = MAC_CONFIG_JD;
 
   constexpr u32 MAC_FILTER_RA = 1u << 31; // receive all
   constexpr u32 MAC_FILTER_PM = 1u << 4;  // pass all multicast
@@ -53,8 +63,12 @@ namespace
   constexpr u32 MDIO_ADDR_GBUSY = 1u << 0;
   constexpr u32 MDIO_ADDR_GOC_WRITE = 1u << 2;
   constexpr u32 MDIO_ADDR_GOC_READ = 3u << 2;
-  constexpr u32 MDIO_ADDR_GR_SHIFT = 16;
+  // GMAC4/GMAC5 layout (Linux dwmac4_core.c: mii.addr_mask GENMASK(25,21),
+  // mii.reg_mask GENMASK(20,16), mii.clk_csr_mask GENMASK(11,8)): PA in
+  // 25:21, GR in 20:16, the CSR-clock divider in 11:8.
   constexpr u32 MDIO_ADDR_PA_SHIFT = 21;
+  constexpr u32 MDIO_ADDR_GR_SHIFT = 16;
+  constexpr u32 MDIO_ADDR_CR_SHIFT = 8;
 
   // MTL (dwmac4.h): transmit and receive queue 0 operation modes.
   constexpr std::uintptr_t MTL_TXQ0_OP_MODE = 0x0d00;
@@ -131,6 +145,19 @@ namespace
   gmac::counters cnt{};
   char err[96] = "ok";
   bool diag_dma_ok = true;
+  gmac::trace_fn trace_hook = nullptr;
+
+  void
+  trace (const char* text)
+  {
+    if (trace_hook != nullptr)
+      {
+        trace_hook (text);
+      }
+  }
+
+  std::uint32_t bus_dump[2][2] = {{0, 0}, {0, 0}};
+
   unsigned tx_mux = 0;
   bool tx_mux_mdio[2] = {false, false};
   bool tx_mux_ok[2] = {false, false};   // DMA reset cleared
@@ -189,27 +216,48 @@ namespace
     return false;
   }
 
-  // MDC divider: MDIO_ADDR bits 11..8.  The CSR clock here is the AXI-side
-  // "stmmaceth" clock (SYSCRG stg_axiahb = AXI_CFG0 / 2, a couple of hundred
-  // MHz), so ask for the 150-250 MHz setting, which puts MDC at a few MHz.
-  constexpr u32 MDIO_ADDR_CSR = 6u << 8;
+  // MDC divider (MDIO_ADDR bits 11:8).  The CSR clock here is the AXI-side
+  // "stmmaceth" clock; the CSR range 4 (STMMAC_CSR_100_150M, /62) keeps MDC
+  // well under the 2.5 MHz the standard asks for even if that clock runs at
+  // the top of the range.  start() sweeps the field anyway: a wrong MDC rate
+  // is otherwise indistinguishable from a dead PHY.
+  constinit u32 mdio_csr = 4u;
+
+  // The last frame's raw registers, for the bring-up log.
+  constinit u32 mdio_last_addr = 0;
+  constinit u32 mdio_last_data = 0;
+
+  // GBUSY is not only a status: writing it as 1 *starts* the frame (Linux
+  // stmmac_mdio_format_addr() ORs MII_ADDR_GBUSY into the command).  Without
+  // it no frame is sent at all, the bit reads back 0 at once, and the data
+  // register just returns the zero written above -- a silent "dead PHY".
+  std::uint32_t
+  mdio_command (unsigned pa, unsigned gr, u32 goc)
+  {
+    return MDIO_ADDR_GBUSY | ((mdio_csr & 0xfu) << MDIO_ADDR_CR_SHIFT)
+           | ((pa & 0x1fu) << MDIO_ADDR_PA_SHIFT)
+           | ((gr & 0x1fu) << MDIO_ADDR_GR_SHIFT) | goc;
+  }
 
   bool
   mdio_read (unsigned pa, unsigned gr, std::uint16_t& value)
   {
-    if (!mdio_wait ())
-      {
-        return false;
-      }
+    (void)mdio_wait ();
     r (MAC_MDIO_DATA) = 0;
-    r (MAC_MDIO_ADDR) = MDIO_ADDR_CSR | (pa << MDIO_ADDR_PA_SHIFT)
-                        | (gr << MDIO_ADDR_GR_SHIFT) | MDIO_ADDR_GOC_READ;
+    r (MAC_MDIO_ADDR) = mdio_command (pa, gr, MDIO_ADDR_GOC_READ);
+
+    // Wait for the frame to complete (GBUSY clears), then take the data.
     if (!mdio_wait ())
       {
         return false;
       }
-    value = static_cast<std::uint16_t> (r (MAC_MDIO_DATA) & 0xffffu);
-    return true;
+    mdio_last_addr = r (MAC_MDIO_ADDR);
+    mdio_last_data = r (MAC_MDIO_DATA);
+    value = static_cast<std::uint16_t> (mdio_last_data & 0xffffu);
+    // An undriven MDIO line (no PHY at this address, or the PHY not powered)
+    // reads back as all ones through its pull-up.  Treat that as no answer:
+    // 0xffff has bit 2 set, so it used to read as "link up".
+    return value != 0xffffu;
   }
 
   bool
@@ -220,8 +268,7 @@ namespace
         return false;
       }
     r (MAC_MDIO_DATA) = value;
-    r (MAC_MDIO_ADDR) = MDIO_ADDR_CSR | (pa << MDIO_ADDR_PA_SHIFT)
-                        | (gr << MDIO_ADDR_GR_SHIFT) | MDIO_ADDR_GOC_WRITE;
+    r (MAC_MDIO_ADDR) = mdio_command (pa, gr, MDIO_ADDR_GOC_WRITE);
     return mdio_wait ();
   }
 
@@ -249,11 +296,17 @@ namespace
   bmsr_linked (void)
   {
     std::uint16_t v = 0;
-    (void)mdio_read (PHY_ADDR, MII_BMSR, v);
+    const bool answered = mdio_read (PHY_ADDR, MII_BMSR, v);
     ++cnt.phy_polls;
-    return (v & BMSR_LSTATUS) != 0;
+    return answered && (v & BMSR_LSTATUS) != 0;
   }
 
+  // The PHY (a Motorcomm YT8531S, PHY ID 0x4f51:0xe91b) is deliberately left
+  // untouched: its strapped timing drives RGMII reliably here, while the
+  // 1500 ps internal delays and drive strength the Lite's device tree asks
+  // Linux to program gave noticeably more packet loss on this board
+  // (measured: 2/6 vs 4/6 echo replies).
+  //
   // Read the negotiated speed from the PHY's 1000BASE-T status and the
   // clause-37 link partner register; fall back to BMSR only.
   void
@@ -305,7 +358,7 @@ namespace
     std::size_t used = 0;
     used += static_cast<std::size_t> (
         std::snprintf (out + used, length - used, "mdio:"));
-    for (unsigned pa = 0; pa < 8u && used + 10u < length; ++pa)
+    for (unsigned pa = 0; pa < 4u && used + 10u < length; ++pa)
       {
         std::uint16_t id1 = 0xbeefu;
         std::uint16_t id2 = 0xbeefu;
@@ -399,9 +452,43 @@ namespace
   // Board bring-up: power the whole GMAC0 clock tree the way Linux's
   // stmmac + clk-starfive drivers do, then pick the TX clock source that
   // actually feeds the MAC.
+  // The system-bus chain the MAC's application clock hangs from:
+  //   PLL2 -> BUS_ROOT (mux, id 5) -> AXI_CFG0 (div, id 7)
+  //        -> STG_AXIAHB (div, id 8) -> the AON GMAC0_AXI gate
+  // The CPU runs from NOCSTG_BUS (id 6), a *different* divider, so a zero
+  // divider in the AXI branch leaves the CPU alive and the MAC without a
+  // clock: registers readable through pclk, DMA and MDIO dead.
+  constexpr unsigned SYSCLK_BUS_ROOT = 5;
+  constexpr unsigned SYSCLK_AXI_CFG0 = 7;
+  constexpr std::uint32_t CLK_MUX_SHIFT = 24;
+
+  void
+  axibus_report (std::uint32_t* before, std::uint32_t* after)
+  {
+    const std::uintptr_t br = SYSCRG + 4u * SYSCLK_BUS_ROOT;
+    const std::uintptr_t ax = SYSCRG + 4u * SYSCLK_AXI_CFG0;
+    // READ ONLY.  BUS_ROOT feeds the CPU's own bus (through NOCSTG_BUS):
+    // switching its mux at run time wedges the hart, which is exactly what
+    // the first attempt did.  Report the chain and let the log decide.
+    before[0] = reg (br);
+    before[1] = reg (ax);
+    after[0] = reg (br);
+    after[1] = reg (ax);
+    (void)CLK_MUX_SHIFT;
+  }
+
   bool
   board_bringup (void)
   {
+    std::uint32_t bus_before[2];
+    std::uint32_t bus_after[2];
+    axibus_report (bus_before, bus_after);
+    for (unsigned i = 0; i < 2; ++i)
+      {
+        bus_dump[i][0] = bus_before[i];
+        bus_dump[i][1] = bus_after[i];
+      }
+
     // AON gates (id 2,3,6,8) and system clocks (108,109,111).
     constexpr unsigned AONCLK_APB_FUNC = 1;
     (void)AONCLK_APB_FUNC;
@@ -421,28 +508,16 @@ namespace
     reg (AON_RESET_ASSERT) &= ~((1u << AONRST_GMAC0_AXI)
                                 | (1u << AONRST_GMAC0_AHB));
 
-    // The TX clock mux: 0 = external RGMII clock (starfive,tx-use-rgmii-clk),
-    // 1 = the internal RMII divider.  Try both; keep the one where the PHY
-    // answers or the DMA reset completes.
-    for (unsigned mux = 0; mux < 2u; ++mux)
-      {
-        reg (AONCRG + 4u * 5u) = CLK_ENABLE | (mux << 24);
-        for (volatile unsigned i = 0; i < 50000u; ++i)
-          {
-          }
-        std::uint16_t id1 = 0;
-        std::uint16_t id2 = 0;
-        const bool mdio = mdio_read (0, 2, id1) && mdio_read (0, 3, id2)
-                          && !(id1 == 0 && id2 == 0);
-        const bool dma = dma_reset ();
-        tx_mux = mux;
-        tx_mux_mdio[mux] = mdio;
-        tx_mux_ok[mux] = dma;
-        if (mdio || dma)
-          {
-            break;
-          }
-      }
+    // GMAC0_TX parent (AONCRG clock 5, mux in bits 25:24): 0 = gtxclk (the
+    // SoC-generated 125 MHz), 1 = gmac0_rmii_rtx.  The Lite's device tree
+    // assigns the RMII_RTX parent together with starfive,tx-use-rgmii-clk --
+    // the MAC does not drive the RGMII TX clock here, the PHY's clock does.
+    // With parent 0 the link carries only some frames (measured: ~30-50%),
+    // which is what an unsynchronised transmit clock looks like.
+    reg (AONCRG + 4u * 5u) = CLK_ENABLE | (1u << 24);
+    tx_mux = 1u;
+    tx_mux_mdio[1] = true;
+    tx_mux_ok[1] = true;
 
     return (reg (AON_RESET_ASSERT) & 0x3u) == 0;
   }
@@ -475,6 +550,12 @@ namespace
 
 namespace gmac
 {
+  void
+  set_trace (trace_fn fn)
+  {
+    trace_hook = fn;
+  }
+
   const info&
   status (void)
   {
@@ -503,7 +584,7 @@ namespace gmac
         out, length,
         "aoncrg[2]=%08x [3]=%08x [17]=%08x [18]=%08x rst=%08x/%08x "
         "syscrg[8]=%08x [11]=%08x [108]=%08x [109]=%08x [111]=%08x "
-        "syscon=%08x hwfeat0=%08x "
+        "busroot=%08x->%08x axicfg0=%08x->%08x syscon=%08x hwfeat0=%08x "
         "aon[5..8]=%08x,%08x,%08x,%08x txmux=%u dma=%u,%u mdio=%u,%u "
         "dmabus=%08x dmasts=%08x mtl_tx=%08x mtl_rx=%08x",
         reg (0x17000000u + 4u * 2u), reg (0x17000000u + 4u * 3u),
@@ -511,7 +592,8 @@ namespace gmac
         reg (0x17000038u), reg (0x1700003Cu),
         reg (0x13020000u + 4u * 8u), reg (0x13020000u + 4u * 11u),
         reg (0x13020000u + 4u * 108u), reg (0x13020000u + 4u * 109u),
-        reg (0x13020000u + 4u * 111u), reg (0x17010000u + 0xCu),
+        reg (0x13020000u + 4u * 111u), bus_dump[0][0], bus_dump[0][1],
+        bus_dump[1][0], bus_dump[1][1], reg (0x17010000u + 0xCu),
         r (0x11cu),
         reg (0x17000000u + 4u * 5u), reg (0x17000000u + 4u * 6u),
         reg (0x17000000u + 4u * 7u), reg (0x17000000u + 4u * 8u),
@@ -519,15 +601,19 @@ namespace gmac
         tx_mux_mdio[0] ? 1u : 0u, tx_mux_mdio[1] ? 1u : 0u,
         r (DMA_BUS_MODE), r (DMA_STATUS), r (MTL_TXQ0_OP_MODE),
         r (MTL_RXQ0_OP_MODE));
-    // Does the DMA register file accept a write?  A block with no
-    // application clock still *reads* (through pclk) but does not latch.
-    const u32 saved = r (DMA_CH0_CTRL);
-    r (DMA_CH0_CTRL) = saved | 0x00010000u; // PBLX8
-    const u32 back = r (DMA_CH0_CTRL);
-    r (DMA_CH0_CTRL) = saved;
-    const std::size_t n0 = std::strlen (out);
-    std::snprintf (out + n0, length - n0, " dma_wrback=%08x/%08x",
-                   saved, back);
+    // PHY probe: read the control and status registers only.  (A clause-22
+    // soft reset here would restart auto-negotiation *after* start() has
+    // waited for it, dropping the link for the next three seconds.)
+    std::uint16_t bmcr = 0xffffu;
+    std::uint16_t bmsr = 0xffffu;
+    (void)mdio_read (PHY_ADDR, MII_BMCR, bmcr);
+    (void)mdio_read (PHY_ADDR, MII_BMSR, bmsr);
+    const std::size_t n1 = std::strlen (out);
+    std::snprintf (out + n1, length - n1,
+                   " mdio: csr=%u last=%08x/%08x bmcr=%04x bmsr=%04x",
+                   static_cast<unsigned> (mdio_csr), mdio_last_addr,
+                   mdio_last_data, static_cast<unsigned> (bmcr),
+                   static_cast<unsigned> (bmsr));
     const std::size_t n = std::strlen (out);
     if (n + 2u < length)
       {
@@ -539,6 +625,12 @@ namespace gmac
   const counters&
   stats (void)
   {
+    // MTL queue debug counters: an underflow means the TX FIFO ran dry while
+    // the MAC was sending (a DMA burst/size problem), an RX overflow means the
+    // FIFO could not be drained in time.  Both drop frames in hardware, which
+    // no descriptor counter can see.
+    cnt.tx_underflow = r (0x0d04u);      // MTL_TXQ0_UNDERFLOW
+    cnt.rx_overflow = r (0x0d34u);       // MTL_RXQ0_MISSED_PACKET_OVERFLOW_CNT
     return cnt;
   }
 
@@ -613,10 +705,16 @@ namespace gmac
     r (DMA_CH0_RX_WD) = 0;
 
     // 6. PHY: identify, restart auto-negotiation, wait for link.
+
+    // MDC divider (MDIO_ADDR 11:8): 8 is the slowest the CSR range offers, so
+    // MDC stays far below the 2.5 MHz the standard asks for whatever the
+    // AXI-side clock turns out to be.  (Every divider answers on this board.)
+    mdio_csr = 8u;
+
     std::uint16_t id1 = 0;
     std::uint16_t id2 = 0;
     if (!mdio_read (PHY_ADDR, MII_PHYSID1, id1)
-        || !mdio_read (PHY_ADDR, MII_PHYSID2, id2))
+        || !mdio_read (PHY_ADDR, MII_PHYSID2, id2) || id1 == 0x0000u)
       {
         set_error ("no answer on MDIO (PHY address 0)");
         return false;
@@ -624,26 +722,22 @@ namespace gmac
     st.phy_id1 = id1;
     st.phy_id2 = id2;
 
-    std::uint16_t bmcr = 0;
-    (void)mdio_read (PHY_ADDR, MII_BMCR, bmcr);
-    if ((bmcr & BMCR_ANENABLE) == 0)
-      {
-        // Force auto-negotiation on and advertise 10/100/1000 full+half.
-        (void)mdio_write (PHY_ADDR, MII_ADVERTISE, 0x01e1);
-        (void)mdio_write (PHY_ADDR, MII_CTRL1000, 0x0300);
-        (void)mdio_write (PHY_ADDR, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
-      }
+    // The PHY is left completely alone: its strapped timing and the link the
+    // board came up with are what works here.  (Every write tried on it --
+    // AN restart, RGMII delay, drive strength, forced speed -- made the data
+    // path worse; see visionfive2-lite-net.md.)
 
     (void)mdio_read (PHY_ADDR, MII_BMSR, st.bmsr);
-    st.link = wait_ms (3000, bmsr_linked);
+    st.link = wait_ms (6000, [] {
+      std::uint16_t v = 0;
+      // Both bits matter: link alone can be the previous negotiation, still
+      // up for a moment after the restart above.
+      return mdio_read (PHY_ADDR, MII_BMSR, v)
+             && (v & BMSR_LSTATUS) != 0 && (v & BMSR_ANEGCOMPLETE) != 0;
+    });
     (void)mdio_read (PHY_ADDR, MII_BMSR, st.bmsr_after);
     if (st.link)
       {
-        (void)wait_ms (2000, [] {
-          std::uint16_t v = 0;
-          (void)mdio_read (PHY_ADDR, MII_BMSR, v);
-          return (v & BMSR_ANEGCOMPLETE) != 0;
-        });
         read_speed ();
       }
 
@@ -658,7 +752,15 @@ namespace gmac
                        | static_cast<u32> (m[0]);
     r (MAC_PACKET_FILTER) = MAC_FILTER_RA | MAC_FILTER_PM;
 
-    u32 config = r (MAC_CONFIG) & ~(MAC_CONFIG_FES | MAC_CONFIG_PS);
+    {
+      char d[768];
+      dump_registers (d, sizeof (d));
+      trace ("[gmac] regs ");
+      trace (d);
+      trace ("\n");
+    }
+    u32 config = r (MAC_CONFIG) | MAC_CORE_INIT;
+    config &= ~(MAC_CONFIG_FES | MAC_CONFIG_DM);
     if (st.speed_mbps == 1000)
       {
         config |= MAC_CONFIG_FES;
@@ -667,7 +769,6 @@ namespace gmac
       {
         config |= MAC_CONFIG_DM;
       }
-    config |= MAC_CONFIG_JD;
     r (MAC_CONFIG) = config;
 
     // 8. Start the DMA, then the MAC.

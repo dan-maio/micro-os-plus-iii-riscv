@@ -75,8 +75,10 @@ namespace
   volatile bool usb_up = false;
   volatile bool usb_mounted = false;
 
-  mutex_recursive console_mutex{ "console" };
-
+  // Every line goes through net_lwip::log(): it holds the one console
+  // mutex, appends to the RAM log and writes UART0.  A second writer here
+  // (with a mutex of its own) would interleave lines on the UART and leave
+  // the RAM log -- the one a JTAG dump reads -- without the test's own text.
   void
   log (const char* fmt, ...)
   {
@@ -85,14 +87,10 @@ namespace
     va_start (ap, fmt);
     const int n = std::vsnprintf (b, sizeof (b), fmt, ap);
     va_end (ap);
-    if (n <= 0)
+    if (n > 0)
       {
-        return;
+        net_lwip::log (b);
       }
-    console_mutex.lock ();
-    uart::write (b, static_cast<std::size_t> (
-                        n < static_cast<int> (sizeof (b)) ? n : sizeof (b) - 1));
-    console_mutex.unlock ();
   }
 
   void
@@ -108,10 +106,6 @@ namespace
   usb_task (void*)
   {
     this_thread::thread ().cpu_affinity (1u << 0);
-    while (port_cpu_id () != 0)
-      {
-        this_thread::yield ();
-      }
     if (!vf2_usb_hw_init ())
       {
         log ("[usb] bring-up failed (OTG DID 0x%08x)\n",
@@ -130,7 +124,7 @@ namespace
             tud_task ();
           }
         mu_usb_cdc_task ();
-        this_thread::yield ();
+        sysclock.sleep_for (1);
       }
     return nullptr;
   }
@@ -139,12 +133,9 @@ namespace
   console_task (void*)
   {
     this_thread::thread ().cpu_affinity (1u << 0);
-    while (port_cpu_id () != 0)
-      {
-        this_thread::yield ();
-      }
     static char line[MU_CDC_RX_BUFSIZE];
     bool was = false;
+    std::uint32_t sent = 0;      // how much of the log the host has seen
     for (;;)
       {
         const bool m = mu_usb_cdc_mounted () != 0;
@@ -155,6 +146,34 @@ namespace
                    : "[usb] unmounted\n");
             was = m;
           }
+        // Mirror the log to the host: the RAM log is the one source, and
+        // this thread is its only consumer on this core.
+        if (m)
+          {
+            const std::uint32_t total = net_lwip::log_length ();
+            if (total > sent)
+              {
+                char chunk[128];
+                while (sent < total)
+                  {
+                    const std::uint32_t want = (total - sent < sizeof (chunk))
+                                                   ? (total - sent)
+                                                   : sizeof (chunk);
+                    net_lwip::log_copy (sent, chunk, want);
+                    if (mu_usb_cdc_write (chunk, want) != want)
+                      {
+                        break;
+                      }
+                    sent += want;
+                  }
+                mu_usb_cdc_flush ();
+              }
+          }
+        else
+          {
+            sent = net_lwip::log_length (); // nothing to catch up on
+          }
+
         const int n = mu_usb_cdc_readline (line, sizeof (line));
         if (n >= 0)
           {
@@ -300,14 +319,16 @@ namespace
           }
         const gmac::counters& g = gmac::stats ();
         const net_lwip::counters& n = net_lwip::stats ();
-        log ("[stats] gmac rx %u tx %u err %u/%u busy %u phy %u; lwip rx %u "
-             "tx %u drop %u\n",
+        log ("[stats] gmac rx %u tx %u err %u/%u busy %u phy %u unf %u ovf %u; "
+             "lwip rx %u tx %u drop %u\n",
              static_cast<unsigned> (g.rx_frames),
              static_cast<unsigned> (g.tx_frames),
              static_cast<unsigned> (g.rx_errors),
              static_cast<unsigned> (g.tx_errors),
              static_cast<unsigned> (g.tx_busy),
              static_cast<unsigned> (g.phy_polls),
+             static_cast<unsigned> (g.tx_underflow),
+             static_cast<unsigned> (g.rx_overflow),
              static_cast<unsigned> (n.rx_frames),
              static_cast<unsigned> (n.tx_frames),
              static_cast<unsigned> (n.rx_dropped));
@@ -345,6 +366,7 @@ os_main (int /*argc*/, char* /*argv*/[])
 {
   led::init ();
   uart::init (board::UART_BAUD);
+  net_lwip::log_reset (); // this run's log only
   net_lwip::log ("\n=============================================\n");
   net_lwip::log ("  " PORT_BANNER_LONG " - micro-os-plus-iii\n");
   net_lwip::log ("  smp-test-usb-cdc-net : GMAC0 + lwIP + USB CDC, 7 threads\n");
@@ -352,12 +374,9 @@ os_main (int /*argc*/, char* /*argv*/[])
 
   // The MAC first: the PHY needs time to negotiate, and the other threads
   // must not poll a half-configured DMA engine.
+  gmac::set_trace (&net_lwip::log);
   const bool gmac_ok = gmac::start (kMac);
-  {
-    static char diag[1024];
-    gmac::dump_registers (diag, sizeof (diag));
-    log ("[gmac] %s\n", diag);
-  }
+  net_lwip::log ("[gmac] start returned\n");
   log ("[gmac] version 0x%04x, dma reset %s, phy id 0x%04x:0x%04x, link %s "
        "%u Mb/s%s%s\n",
        static_cast<unsigned> (gmac::status ().version),
@@ -372,6 +391,7 @@ os_main (int /*argc*/, char* /*argv*/[])
       hw_result::fail ();
     }
 
+  net_lwip::log ("[net] lwip init\n");
   if (!net_lwip::init (kMac))
     {
       log ("[net] lwIP init failed\n");
@@ -382,43 +402,57 @@ os_main (int /*argc*/, char* /*argv*/[])
       net_lwip::set_link (true);
     }
 
+  net_lwip::log ("[test] creating threads: stacks usb 32K console 32K rx 64K "
+                 "net 64K app 128K stats 32K mon 32K\n");
+
+  // The main thread is created at `normal` (os-main.cpp), and a thread
+  // created at a *higher* priority starts at once and never yields back to a
+  // `normal` thread: the rest of this function would never run.  Hold the
+  // creator above every worker for the burst of creations, then let the
+  // workers run.
+  thread& self = this_thread::thread ();
+  const thread::priority_t self_priority = self.priority ();
+  self.priority (thread::priority::realtime);
+
   thread::attributes attr = thread::initializer;
 
   attr.th_stack_address = usb_stack;
   attr.th_stack_size_bytes = sizeof (usb_stack);
   attr.th_priority = thread::priority::above_normal;
-  static thread usb_th{ "usb", usb_task, nullptr, attr };
+    static thread usb_th{ "usb", usb_task, nullptr, attr };
 
   attr.th_stack_address = console_stack;
   attr.th_stack_size_bytes = sizeof (console_stack);
   attr.th_priority = thread::priority::normal;
-  static thread console_th{ "console", console_task, nullptr, attr };
+    static thread console_th{ "console", console_task, nullptr, attr };
 
   attr.th_stack_address = rx_stack;
   attr.th_stack_size_bytes = sizeof (rx_stack);
   attr.th_priority = thread::priority::high;
-  static thread rx_th{ "eth-rx", rx_task, nullptr, attr };
+    static thread rx_th{ "eth-rx", rx_task, nullptr, attr };
 
   attr.th_stack_address = net_stack;
   attr.th_stack_size_bytes = sizeof (net_stack);
   attr.th_priority = thread::priority::above_normal;
-  static thread net_th{ "net", net_task, nullptr, attr };
+    static thread net_th{ "net", net_task, nullptr, attr };
 
   attr.th_stack_address = app_stack;
   attr.th_stack_size_bytes = sizeof (app_stack);
   attr.th_priority = thread::priority::normal;
-  static thread app_th{ "app", app_task, nullptr, attr };
+    static thread app_th{ "app", app_task, nullptr, attr };
 
   attr.th_stack_address = stats_stack;
   attr.th_stack_size_bytes = sizeof (stats_stack);
   attr.th_priority = thread::priority::below_normal;
-  static thread stats_th{ "stats", stats_task, nullptr, attr };
+    static thread stats_th{ "stats", stats_task, nullptr, attr };
 
   attr.th_stack_address = mon_stack;
   attr.th_stack_size_bytes = sizeof (mon_stack);
   attr.th_priority = thread::priority::low;
-  static thread mon_th{ "mon", monitor_task, nullptr, attr };
+    static thread mon_th{ "mon", monitor_task, nullptr, attr };
 
+  net_lwip::log ("[test] threads created\n");
+  self.priority (self_priority);
   // The report: a thread of the runner (the USB console stays alive until the
   // verdict, so the host can still type while the network is tested).
   for (;;)

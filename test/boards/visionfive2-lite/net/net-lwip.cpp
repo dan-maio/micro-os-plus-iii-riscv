@@ -86,6 +86,24 @@ namespace
   // lwIP's own diagnostics all end here.
   os::rtos::mutex_recursive console_mutex{"console"};
 
+  // lwIP is built with NO_SYS=1 (a single-threaded core): every entry point
+  // must be serialised.  Here three threads use it -- the receive thread
+  // (input), the net thread (timers) and the app (ping, DHCP poll) -- so a
+  // recursive lock guards the core.  It is held for individual calls only,
+  // never across a sleep: otherwise the receive thread could not deliver the
+  // frame the caller is waiting for.
+  os::rtos::mutex_recursive lwip_mutex{"lwip"};
+
+  struct lwip_lock
+  {
+    lwip_lock () { lwip_mutex.lock (); }
+    ~lwip_lock () { lwip_mutex.unlock (); }
+    lwip_lock (const lwip_lock&) = delete;
+    lwip_lock&
+    operator= (const lwip_lock&)
+        = delete;
+  };
+
   // The same text is kept in RAM at board::SCRATCH_BASE, so a run can be
   // read back over JTAG (OpenOCD) without touching the serial port.  Layout:
   // magic, length, text -- the text is NUL-terminated as it is written.
@@ -135,12 +153,10 @@ namespace
   }
 
   void
-  print_ip (const ip4_addr_t& a)
+  print_ip (char* out, std::size_t length, const ip4_addr_t& a)
   {
-    char b[32];
-    std::snprintf (b, sizeof (b), "%u.%u.%u.%u", ip4_addr1 (&a),
-                   ip4_addr2 (&a), ip4_addr3 (&a), ip4_addr4 (&a));
-    uart::write (b);
+    std::snprintf (out, length, "%u.%u.%u.%u", ip4_addr1 (&a), ip4_addr2 (&a),
+                   ip4_addr3 (&a), ip4_addr4 (&a));
   }
 
   void
@@ -150,13 +166,25 @@ namespace
       {
         return;
       }
-    uart::write ("\n[net] lease: address ");
-    print_ip (*netif_ip4_addr (itf));
-    uart::write (" mask ");
-    print_ip (*netif_ip4_netmask (itf));
-    uart::write (" gateway ");
-    print_ip (*netif_ip4_gw (itf));
-    uart::write ("\n");
+    char address[24];
+    char mask[24];
+    char gateway[24];
+    print_ip (address, sizeof (address), *netif_ip4_addr (itf));
+    print_ip (mask, sizeof (mask), *netif_ip4_netmask (itf));
+    print_ip (gateway, sizeof (gateway), *netif_ip4_gw (itf));
+    char b[128];
+    std::snprintf (b, sizeof (b), "\n[net] lease: address %s mask %s gateway %s\n",
+                   address, mask, gateway);
+    log (b);
+
+    // Announce the new binding: until the peer's ARP cache has our MAC, an
+    // echo request is delivered to the IP stack only to be dropped (or its
+    // reply is sent to an unknown MAC).  A gratuitous ARP here makes the
+    // first ping after the lease reliable.
+    {
+      lwip_lock guard;
+      etharp_gratuitous (&et0);
+    }
   }
 
   // ------------------------------------------------------------- echo server
@@ -425,6 +453,35 @@ namespace net_lwip
     ::log (text); // the single-writer helper above
   }
 
+  void
+  log_reset (void)
+  {
+    log_word (0) = LOG_MAGIC;
+    log_word (1) = 0;
+    log_text ()[0] = '\0';
+  }
+
+  std::uint32_t
+  log_length (void)
+  {
+    return log_word (1);
+  }
+
+  void
+  log_copy (std::uint32_t offset, char* out, std::uint32_t length)
+  {
+    const std::uint32_t total = log_word (1);
+    if (offset >= total)
+      {
+        return;
+      }
+    const std::uint32_t n = (length < total - offset) ? length : total - offset;
+    for (std::uint32_t i = 0; i < n; ++i)
+      {
+        out[i] = log_text ()[offset + i];
+      }
+  }
+
   const counters&
   stats (void)
   {
@@ -438,6 +495,15 @@ namespace net_lwip
       {
         return true;
       }
+    // Claim the RAM log if nobody has: never clear it, the lines before
+    // lwIP came up (banner, GMAC bring-up) are the interesting ones.
+    if (log_word (0) != LOG_MAGIC)
+      {
+        log_word (0) = LOG_MAGIC;
+        log_word (1) = 0;
+        log_text ()[0] = '\0';
+      }
+
     lwip_init ();
     netif_add (&et0, nullptr, nullptr, nullptr, nullptr, interface_init,
                ethernet_input);
@@ -458,6 +524,7 @@ namespace net_lwip
   {
     if (initialised)
       {
+        lwip_lock guard;
         sys_check_timeouts ();
       }
   }
@@ -469,6 +536,7 @@ namespace net_lwip
       {
         return;
       }
+    lwip_lock guard;
     pbuf* p = pbuf_alloc (PBUF_RAW, static_cast<u16_t> (length), PBUF_POOL);
     if (p == nullptr)
       {
@@ -533,23 +601,27 @@ namespace net_lwip
         log ("[net] not initialised\n");
         return;
       }
-    uart::write ("[net] et0 link ");
-    uart::write (netif_is_link_up (&et0) ? "up, address " : "down, address ");
-    print_ip (*netif_ip4_addr (&et0));
-    uart::write (" mask ");
-    print_ip (*netif_ip4_netmask (&et0));
-    uart::write (" gateway ");
-    print_ip (*netif_ip4_gw (&et0));
-    char b[96];
+    char address[24];
+    char mask[24];
+    char gateway[24];
+    print_ip (address, sizeof (address), *netif_ip4_addr (&et0));
+    print_ip (mask, sizeof (mask), *netif_ip4_netmask (&et0));
+    print_ip (gateway, sizeof (gateway), *netif_ip4_gw (&et0));
+    char b[192];
     std::snprintf (b, sizeof (b),
-                   "\n[net] frames rx %u tx %u dropped %u; echo %u conn, %lu "
+                   "[net] et0 link %s, address %s mask %s gateway %s\n",
+                   netif_is_link_up (&et0) ? "up" : "down", address, mask,
+                   gateway);
+    log (b);
+    std::snprintf (b, sizeof (b),
+                   "[net] frames rx %u tx %u dropped %u; echo %u conn, %lu "
                    "bytes\n",
                    static_cast<unsigned> (cnt.rx_frames),
                    static_cast<unsigned> (cnt.tx_frames),
                    static_cast<unsigned> (cnt.rx_dropped),
                    static_cast<unsigned> (cnt.echo_connections),
                    static_cast<unsigned long> (cnt.echo_bytes));
-    uart::write (b);
+    log (b);
   }
 
   unsigned
@@ -580,76 +652,158 @@ namespace net_lwip
           }
       }
 
-    raw_pcb* pcb = raw_new (IP_PROTO_ICMP);
-    if (pcb == nullptr)
+    // Resolve the next hop first.  lwIP drops (or queues only one) frame per
+    // unresolved ARP entry, so the first echoes would otherwise be lost while
+    // the ARP request/reply round trip is still in flight -- which is exactly
+    // how a working link looks like "no reply within 1 s".
+    if (IP_IS_V4 (&destination))
       {
-        return 0;
+        ip4_addr_t next_hop;
+        const ip4_addr_t* dst4 = ip_2_ip4 (&destination);
+        if (ip4_addr_netcmp (dst4, netif_ip4_addr (&et0),
+                             netif_ip4_netmask (&et0)))
+          {
+            ip4_addr_copy (next_hop, *dst4);
+          }
+        else
+          {
+            ip4_addr_copy (next_hop, *netif_ip4_gw (&et0));
+          }
+        for (unsigned i = 0; i < 100u; ++i)
+          {
+            bool resolved = false;
+            {
+              lwip_lock guard;
+              if (i == 0)
+                {
+                  (void)etharp_request (&et0, &next_hop);
+                }
+              struct eth_addr* eth = nullptr;
+              const ip4_addr_t* found = nullptr;
+              resolved = etharp_find_addr (&et0, &next_hop, &eth, &found) >= 0;
+            }
+            if (resolved)
+              {
+                break;
+              }
+            os::rtos::sysclock.sleep_for (10);
+          }
       }
-    raw_recv (pcb, ping_received, nullptr);
-    raw_bind (pcb, IP_ADDR_ANY);
 
+    raw_pcb* pcb = nullptr;
+    {
+      lwip_lock guard;
+      pcb = raw_new (IP_PROTO_ICMP);
+      if (pcb == nullptr)
+        {
+          return 0;
+        }
+      raw_recv (pcb, ping_received, nullptr);
+      raw_bind (pcb, IP_ADDR_ANY);
+    }
+
+    // Each echo is retransmitted (as a real ping tool does): this board's
+    // RGMII path drops a noticeable fraction of frames, and one lost echo is
+    // not evidence that the network is broken.
+    constexpr unsigned attempts_per_echo = 3;
     unsigned replies = 0;
+    unsigned retries = 0;
     for (unsigned i = 0; i < count; ++i)
       {
-        pinging.replied = false;
-        pinging.seq = static_cast<std::uint16_t> (i);
-        pinging.length = 56;
+        bool got = false;
+        unsigned attempts = 0;
+        std::uint32_t rtt_us = 0;
+        while (!got && attempts < attempts_per_echo)
+          {
+            ++attempts;
+            pinging.replied = false;
+            pinging.seq = static_cast<std::uint16_t> (i);
+            pinging.length = 56;
 
-        pbuf* p = pbuf_alloc (PBUF_IP, 56, PBUF_RAM);
-        if (p == nullptr)
-          {
-            break;
-          }
-        auto* echo = static_cast<icmp_echo_hdr*> (p->payload);
-        ICMPH_TYPE_SET (echo, ICMP_ECHO);
-        ICMPH_CODE_SET (echo, 0);
-        echo->id = lwip_htons (0x4d51u);
-        echo->seqno = lwip_htons (pinging.seq);
-        for (std::uint16_t k = 8; k < 56; ++k)
-          {
-            static_cast<std::uint8_t*> (p->payload)[k]
-                = static_cast<std::uint8_t> (k + i);
-          }
-        // lwIP fills the checksum when IP_HLEN is in front of the ICMP header
-        // only if we ask; compute it here over the ICMP bytes.
-        echo->chksum = 0;
-        echo->chksum = inet_chksum (p->payload, 56);
+            const std::uint32_t t0 = static_cast<std::uint32_t> (
+                os::rtos::sysclock.now ());
 
-        const std::uint32_t t0 = static_cast<std::uint32_t> (
-            os::rtos::sysclock.now ());
-        if (raw_sendto (pcb, p, &destination) == ERR_OK)
-          {
-            if (wait_for (1000, [] { return pinging.replied; }))
+            bool sent = false;
+            {
+              lwip_lock guard;
+              pbuf* p = pbuf_alloc (PBUF_IP, 56, PBUF_RAM);
+              if (p == nullptr)
+                {
+                  break;
+                }
+              auto* echo = static_cast<icmp_echo_hdr*> (p->payload);
+              ICMPH_TYPE_SET (echo, ICMP_ECHO);
+              ICMPH_CODE_SET (echo, 0);
+              echo->id = lwip_htons (0x4d51u);
+              echo->seqno = lwip_htons (pinging.seq);
+              for (std::uint16_t k = 8; k < 56; ++k)
+                {
+                  static_cast<std::uint8_t*> (p->payload)[k]
+                      = static_cast<std::uint8_t> (k + i);
+                }
+              // lwIP fills the checksum when IP_HLEN is in front of the ICMP
+              // header only if we ask; compute it over the ICMP bytes here.
+              echo->chksum = 0;
+              echo->chksum = inet_chksum (p->payload, 56);
+
+              sent = raw_sendto (pcb, p, &destination) == ERR_OK;
+              pbuf_free (p);
+            }
+            if (!sent)
               {
-                ++replies;
-                pinging.rtt_us = (static_cast<std::uint32_t> (
-                                      os::rtos::sysclock.now ())
-                                  - t0)
-                                 * 1000u;
-                char b[96];
-                std::snprintf (b, sizeof (b),
-                               "[net] 64 bytes from %u.%u.%u.%u: icmp_seq=%u "
-                               "ttl=%u time=%lu.%03lu ms\n",
-                               ip4_addr1 (&destination), ip4_addr2 (&destination),
-                               ip4_addr3 (&destination), ip4_addr4 (&destination),
-                               i + 1, static_cast<unsigned> (pinging.ttl),
-                               static_cast<unsigned long> (pinging.rtt_us / 1000),
-                               static_cast<unsigned long> (pinging.rtt_us % 1000));
-                uart::write (b);
+                break;
               }
-            else
+            got = wait_for (500, [] { return pinging.replied; });
+            if (got)
               {
-                char b[64];
-                std::snprintf (b, sizeof (b),
-                               "[net] icmp_seq=%u: no reply within 1 s\n",
-                               i + 1);
-                uart::write (b);
+                rtt_us = (static_cast<std::uint32_t> (
+                              os::rtos::sysclock.now ())
+                          - t0)
+                         * 1000u;
+              }
+            else if (attempts < attempts_per_echo)
+              {
+                ++retries;
               }
           }
-        pbuf_free (p);
-        os::rtos::sysclock.sleep_for (500);
+
+        if (got)
+          {
+            ++replies;
+            pinging.rtt_us = rtt_us;
+            char b[112];
+            std::snprintf (b, sizeof (b),
+                           "[net] 64 bytes from %u.%u.%u.%u: icmp_seq=%u ttl=%u "
+                           "time=%lu.%03lu ms%s\n",
+                           ip4_addr1 (&destination), ip4_addr2 (&destination),
+                           ip4_addr3 (&destination), ip4_addr4 (&destination),
+                           i + 1, static_cast<unsigned> (pinging.ttl),
+                           static_cast<unsigned long> (pinging.rtt_us / 1000),
+                           static_cast<unsigned long> (pinging.rtt_us % 1000),
+                           attempts > 1 ? " (retry)" : "");
+            log (b);
+          }
+        else
+          {
+            char b[72];
+            std::snprintf (b, sizeof (b),
+                           "[net] icmp_seq=%u: no reply after %u attempts\n",
+                           i + 1, attempts);
+            log (b);
+          }
+        os::rtos::sysclock.sleep_for (200);
       }
-    raw_remove (pcb);
+    {
+      char b[96];
+      std::snprintf (b, sizeof (b),
+                     "[net] ping: %u/%u replies, %u retransmissions\n",
+                     replies, count, retries);
+      log (b);
+    }
+    {
+      lwip_lock guard;
+      raw_remove (pcb);
+    }
     return replies;
   }
 } // namespace net_lwip

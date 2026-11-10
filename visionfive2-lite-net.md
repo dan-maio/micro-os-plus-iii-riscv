@@ -2,8 +2,9 @@
 
 **Board:** StarFive VisionFive 2 Lite (JH-7110S, four SiFive U74 RV64GC, up to 1.25 GHz)
 **Test:** `test/visionfive2-lite/smp-test-usb-cdc-net`
-**State:** the SMP/thread/USB side runs on hardware; the Ethernet data path is **not
-finished** — this document records exactly how far it got and what is left.
+**State:** **works on hardware** — carrier at 1 Gb/s, DHCP lease, ICMP echo replies
+(measured: 4/4 and 20/20 with no retransmissions), USB CDC console, PASS.  Section 6
+records the measurements and the four bugs that had to be fixed to get there.
 
 ---
 
@@ -58,12 +59,13 @@ Register facts (JH-7110, `jh7110.dtsi`):
 | Clocks | AONCRG `GMAC0_AHB` (pclk), `GMAC0_AXI` (stmmaceth), `GMAC0_TX`/`TX_INV`; SYSCRG `GMAC0_PTP`, `GMAC0_GTXC`, `GMAC0_GTXCLK` |
 | Resets | AONCRG `GMAC0_AXI` (0), `GMAC0_AHB` (1), in `AONCRG+0x38` |
 | PHY interface field | `aon_syscon` (`0x17010000`) + `0xc`, bits 18..20; **1 = RGMII**, 4 = RMII |
-| PHY | Motorcomm YT8531 at **MDIO address 0**, `rgmii-id` (delays in the PHY), `tx-clk` inversion and 1500 ps internal delays set by the device tree |
+| PHY | Motorcomm **YT8531S** (PHY ID `0x4f51:0xe91b`) at **MDIO address 0**, `rgmii-id` |
+| TX clock | AONCRG clock 5 (`gmac0_tx`), mux in bits 25:24: **parent 1 = `gmac0_rmii_rtx`** (the Lite's device tree assigns it with `starfive,tx-use-rgmii-clk`; the MAC does not generate the RGMII TX clock) |
 | DMA | one channel: `DMA_BUS_MODE 0x1000`, `SYS_BUS 0x1004`, channel 0 at `0x1100`, MTL queues at `0x0d00`/`0x0d30`, 16-byte descriptors, `txpbl/rxpbl = 16`, fixed burst |
 
-The driver implements: clock-gate and reset bring-up with a runtime probe of the
-`gmac0_tx` clock mux, MDIO clause-22 access with the CSR divider programmed, PHY
-auto-negotiation and speed/duplex read-out, the MTL queues (store-and-forward plus the
+The driver implements: clock-gate and reset bring-up (with `gmac0_tx` on its
+`gmac0_rmii_rtx` parent), MDIO clause-22 access, PHY identification and speed/duplex
+read-out, the MTL queues (store-and-forward plus the
 queue enables), 16 RX / 8 TX descriptor rings, MAC address and filter, and the
 polled `send()`/`poll()` pair.  JH-7110 DMA is **not cache coherent**, so every
 descriptor and buffer is written back / invalidated through the L2 controller's
@@ -106,44 +108,75 @@ openocd -s <scripts> -f jh7110_picoprobe.cfg \
   -c "dump_image /tmp/vf2ram.bin 0x43000000 0x6000" -c "shutdown"
 ```
 
-## 6. Status on hardware — what was measured
+## 6. What was measured, and the four bugs it exposed
 
 | Probe | Value | Meaning |
 |---|---|---|
 | `GMAC VERSION` (0x110) | `0x4152` | DW GMAC 5.20 answering |
 | `GMAC_HW_FEATURE0` (0x11c) | `0x1a2173f7` | register file alive, GMII/MII/RGMII present |
 | `aoncrg[2]`, `[3]` | `0x80000000` | `GMAC0_AHB` / `GMAC0_AXI` gates enabled |
-| `syscrg[8]`, `[11]` | `2`, `4` | AXI divider 2, APB divider 4 — the bus clocks run |
-| `syscrg[108/109/111]` | `0x80000008` / `0xa` / `0x20` | GMAC0 GTXCLK, PTP and GTXC enabled with dividers |
-| `aon[5]` (gmux `gmac0_tx`) | `0x80000000` | TX clock mux enabled, parent 0 = the external RGMII clock |
-| `syscon` (`0x17010000+0xc`) | `0x4d540` → bits 18..20 = 1 | PHY interface **RGMII**, already set by the boot chain |
-| `DMA_BUS_MODE` (0x1000) | `0x1` | **soft reset never clears** |
-| MDIO, addresses 0..7 | timeout (`T`) | **the PHY never answers** |
+| `aon[5]` (`gmac0_tx`) | `0x81000000` | TX clock enabled, **parent 1 = `gmac0_rmii_rtx`** |
+| `syscon` (`0x17010000+0xc`) | `0x4d540` → bits 18..20 = 1 | PHY interface **RGMII** |
+| MDIO @0, all dividers | `0x4f51:0xe91b`, BMSR `0x796d` | YT8531S, link up, auto-neg complete |
+| `DMA_BUS_MODE` (0x1000) | `0x00000000` after `SWR` | DMA reset clears |
+| MTL TX/RX FIFO counters | `unf 0 ovf 0` | no FIFO drops |
+| DHCP | `192.168.1.65/24`, gateway `192.168.1.1` | full four-way exchange |
+| ICMP, 20 echoes | **20/20 replies, 0 retransmissions, ~3 ms** | the wire is clean |
 
-So the MAC is clocked and readable, but its **DMA and MDIO do not work**.  Both sit
-in the application-clock (AXI/stmmaceth) domain, and the register-level evidence says
-that domain is enabled — which is why this is not a one-line fix.
+### 6.1 MDIO: the busy bit *starts* the frame
 
-One more fact, measured: **`dhcp` in this board's U-Boot crashes OpenSBI**
-(`system_opcode_insn: Failed to access CSR 0xc01 from M-mode` — U-Boot reads the
-`time` CSR, which the U74 only implements for S-mode).  U-Boot's networking therefore
-never runs here, so it never brings GMAC0 up, and the "let U-Boot do it" shortcut
-(`NET_TEST_INHERIT_GMAC`) has nothing to inherit.
+`MDIO_ADDR` bit 0 (`GBUSY`) is not only a status: it must be **written as 1** with the
+command, and the MAC clears it when the frame is done (Linux:
+`stmmac_mdio_format_addr()` ORs `MII_ADDR_GBUSY` into the address word).  Polling it
+but never setting it sent no frame at all: the bit read back 0 immediately, `DATA`
+returned the zero written just before, and the PHY looked dead.  The field layout is
+Linux's `dwmac4_core.c`: **PA in 25:21, GR in 20:16, CSR divider in 11:8**.  (Getting
+that wrong is silent: the MAC still completes the frame, it just talks to a different
+PHY address.)
 
-## 7. What is left
+### 6.2 The TX clock parent: the real cause of the packet loss
 
-1. **The application-clock/reset order.**  Our gate writes are visible but the DMA
-   still does not run.  The next step is to reproduce the vendor's bring-up order
-   exactly (`dwmac_starfive.c` + `clk-starfive-jh7110-aon.c` + `dwmac4_dma.c`), i.e.
-   reset → clock-unprepare/prepare sequence → PHY-interface field → DMA init, and to
-   read back `DMA_CH0_CTRL` after a write to prove whether the DMA register file
-   latches at all (that probe is already in the log as `dma_wrback=`).
-2. **MDIO.**  Once the DMA block latches, MDIO either follows (same clock domain) or
-   needs its CSR divider (`MDIO_ADDR` bits 11..8) confirmed against the real
-   stmmaceth frequency.
-3. **PHY bring-up.**  The YT8531 needs its 25 MHz reference and the `tx-clk`
-   configuration the device tree applies; if MDIO still times out after (1), that is
-   the next suspect.
+`gmac0_tx` (AONCRG + 0x14, mux bits 25:24) was on parent 0, the SoC's generated
+125 MHz `gtxclk`.  The Lite's device tree assigns **parent 1, `gmac0_rmii_rtx`**,
+together with `starfive,tx-use-rgmii-clk` — on this board the MAC does not generate
+the RGMII transmit clock, the PHY's clock does.  With parent 0 the link came up and
+passed *some* frames (DHCP sometimes, ICMP 25–50 %), which is exactly what an
+unsynchronised transmit clock looks like: no error counters anywhere, just loss.  With
+parent 1: 20/20 echoes, 0 retransmissions.
+
+### 6.3 Thread creation: a higher-priority creator starves itself
+
+The main thread runs at `normal`.  Threads created at `above_normal` start at once and
+never yield back, so `os_main` stopped halfway through the list — with no trap and no
+error, just a log that ended mid-sentence.  The fix is to hold the creator at
+`realtime` for the burst of creations and restore its priority afterwards.  The USB
+thread also had to `sleep_for(1)` instead of `yield()`: a ready `above_normal` thread
+that only yields is a permanent starvation of everything below it.
+
+### 6.4 One console writer
+
+The test's own `log()` wrote to UART0 with a mutex of its own, so its lines never
+reached the RAM/USB log, and two writers interleaved on the serial port.  Every line
+now goes through `net_lwip::log()` (one mutex, RAM copy + UART).
+
+Also fixed on the way: lwIP (`NO_SYS`) is serialised with a single recursive mutex
+around `input`/`poll`/`ping`/`status`; the PHY is **not** touched (an auto-negotiation
+restart, the 1500 ps RGMII delays and the drive-strength writes each made the data path
+worse on this board); and the console's UART write is paced but bounded, so a closed
+terminal can never hang a test.
+
+## 7. Known limitations
+
+- `hw.sh`'s own verdict path is unreliable on this board: the attach sometimes leaves
+  the harts at the entry point and OpenOCD exits `4` (`OPENOCD DIED`) with no
+  `RESULT:` line.  The test's verdict is in its log (`[test] PASS`), and the RAM log
+  can always be read over JTAG (section 5).
+- `dhcp` in this board's U-Boot crashes OpenSBI (`system_opcode_insn: Failed to access
+  CSR 0xc01 from M-mode` — U-Boot reads `time`, which the U74 only implements for
+  S-mode).  U-Boot therefore never brings GMAC0 up, and `NET_TEST_INHERIT_GMAC` has
+  nothing to inherit.
+- Each echo is still retransmitted up to three times if unanswered, and the DHCP wait
+  is 15 s: on a busy LAN one lost frame should fail a report, not the test.
 
 ## 8. Files
 

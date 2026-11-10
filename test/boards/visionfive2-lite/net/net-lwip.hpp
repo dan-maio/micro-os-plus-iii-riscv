@@ -70,4 +70,18 @@ namespace net_lwip
   /// The single console writer of the test (UART0, one line at a time).
   void
   log (const char* text);
+
+  /// The RAM copy of that log: bytes written, and a copy of a range.  The
+  /// USB console thread forwards it to the host, so the same text is
+  /// readable as a ttyACM device.
+  /// Start a fresh log (DDR keeps the previous run's: the board is not
+  /// power-cycled between iterations, and a stale magic would otherwise
+  /// make this run append to the last one).
+  void
+  log_reset (void);
+
+  [[nodiscard]] std::uint32_t
+  log_length (void);
+  void
+  log_copy (std::uint32_t offset, char* out, std::uint32_t length);
 } // namespace net_lwip
