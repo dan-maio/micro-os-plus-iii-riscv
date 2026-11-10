@@ -279,8 +279,9 @@ reset!`), so the verdict is the `RESULT` line on the UART, not `hw.sh`'s exit.
 ## StarFive VisionFive 2 Lite (test/boards/visionfive2-lite)
 
 The Ethernet + USB-CDC test (`smp-test-usb-cdc-net`, seven threads on the four
-U74s, a DesignWare GMAC 5.20 driver and lwIP) is documented separately, with
-its measured register-level status and the one open bring-up item:
+U74s, a DesignWare GMAC 5.20 driver and lwIP) **passes on hardware**: 1 Gb/s
+link, DHCP lease and ICMP echo replies, with the USB CDC as its console.  The
+bring-up, the four bugs behind it and the measured register values are in
 **[visionfive2-lite-net.md](visionfive2-lite-net.md)**
 (**[PDF](visionfive2-lite-net.pdf)**).
 
