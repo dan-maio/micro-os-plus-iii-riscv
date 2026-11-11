@@ -107,10 +107,16 @@ set (NET_TEST_PEER "" CACHE STRING
 # checked against (hw.sh refuses an image older than them).  Shared with the
 # rest of the tree: lwIP itself, this board's lwipopts.h / arch/cc.h, and the
 # MangoPi MQ-Pro's header-only WPA2 crypto.
-set (_vf2_wifi_tests smp-wifi)
+set (_vf2_wifi_tests smp-wifi vf2-wifi-ram-disk)
 set (_vf2_wifi_dir "${CMAKE_CURRENT_LIST_DIR}/smp-wifi")
 set (_vf2_wifi_crypto_dir
      "${CMAKE_CURRENT_LIST_DIR}/../boards/mangopi-mq-pro/wifi/src/wifi")
+
+# vf2-wifi-ram-disk: smp-wifi's radio, WPA2 and lwIP code, unchanged, plus a
+# 512 MiB RAM disk (FatFs, the copy under emmc-fs-test/fatfs) and a TCP file
+# server.  Its own sources are in its directory; it reads smp-wifi's headers
+# (net/, wifi/, wifi-config.hpp) through that directory on the include path.
+set (_vf2_wifi_ramdisk_tests vf2-wifi-ram-disk)
 
 # What smp-wifi associates with.  No credentials in the repository: pass them
 # on the cmake line (the same entries as the MangoPi MQ-Pro's wifi-net), e.g.
@@ -123,6 +129,11 @@ set (WIFI_TEST_PEER "" CACHE STRING "smp-wifi: optional second host to ping")
 
 function (board_test_sources _app _out)
   if ("${_app}" IN_LIST _vf2_wifi_tests)
+    set (_extra "")
+    if ("${_app}" IN_LIST _vf2_wifi_ramdisk_tests)
+      set (_extra "${_vf2_fatfs_dir}/source/ff.c"
+                  "${_vf2_fatfs_dir}/source/ffunicode.c")
+    endif ()
     file (GLOB _wifi_lwip CONFIGURE_DEPENDS
           "${_vf2_lwip_dir}/src/core/*.c"
           "${_vf2_lwip_dir}/src/core/ipv4/*.c"
@@ -134,6 +145,7 @@ function (board_test_sources _app _out)
          "${_vf2_wifi_dir}/wifi/wlan.cpp"
          "${_vf2_wifi_dir}/net/wifi-lwip.cpp"
          ${_wifi_lwip}
+         ${_extra}
          PARENT_SCOPE)
   elseif ("${_app}" IN_LIST _vf2_usb_net_tests)
     file (GLOB _net_lwip CONFIGURE_DEPENDS
@@ -164,7 +176,15 @@ function (board_test_sources _app _out)
 endfunction ()
 
 function (board_test_includes _app _out)
-  if ("${_app}" IN_LIST _vf2_wifi_tests)
+  if ("${_app}" IN_LIST _vf2_wifi_ramdisk_tests)
+    set (${_out}
+         "${_vf2_wifi_dir}"
+         "${_vf2_fatfs_dir}/include"
+         "${_vf2_wifi_crypto_dir}"
+         "${_vf2_net_dir}"
+         "${_vf2_lwip_dir}/src/include"
+         PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_wifi_tests)
     set (${_out}
          "${_vf2_wifi_crypto_dir}"
          "${_vf2_net_dir}"
