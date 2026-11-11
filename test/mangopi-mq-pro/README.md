@@ -10,9 +10,9 @@ is never opened by the runner.
 
 `clock-catchup`, `clock-test`, `exc-test`, `mmu-test`, `mos-test1`,
 `mutex-ceiling-test`, `sc-test-ko`, `smp-mat-test`, `smp_test0`,
-`smp-test1`, and **`wifi-net`** (below).
+`smp-test1`, **`wifi-net`** and **`wifi-ram-disk`** (below).
 
-All eleven pass on the MQ-Pro.
+All twelve pass on the MQ-Pro.
 
 ## QEMU tests
 
@@ -108,6 +108,30 @@ report), put the board in FEL from the card's own image, then use
 ```sh
 BUILD=test/build-wifi NORESET=1 test/boards/mangopi-mq-pro/hw.sh wifi-net
 ```
+
+## wifi-ram-disk — files over Wi-Fi into a 512 MiB RAM disk
+
+`wifi-ram-disk` keeps `wifi-net`'s radio and lwIP stack unchanged and adds a
+**512 MiB RAM disk** at `0x60000000` (the upper half of the 1 GiB board, above
+the image's 512 MiB window) with a FAT32 filesystem, and a TCP file server on
+port 5000.  The RAM disk and the server are shared with the VisionFive 2 Lite
+tests `vf2-wifi-ram-disk` and `smp-net-ram-disk`
+(`test/visionfive2-lite/vf2-wifi-ram-disk/`), and so are the PC tools.
+
+One thread, `net`, owns the radio, lwIP and FatFs: the file server works only
+inside lwIP callbacks and an lwIP timer (its UDP beacon,
+`MQPRO-RAM-DISK <ip> 5000` on port 5001), so nothing else is needed for safety.
+
+```sh
+cmake --build test/build-mqpro --target wifi-ram-disk-hwd -j   # build with WIFI_TEST_SSID/PASS
+test/mangopi-mq-pro/wifi-ram-disk/wifi-ram-disk-host.py test.bin photo.png --random 2097152
+```
+
+The script runs `hw.sh` (xfel), finds the board by its beacon, sends the
+files, lists the RAM disk, reads every file back as `<file>.bak`, compares
+SHA-256 and sends the verdict; the board stores it in the RTC and resets to
+FEL.  Measured: 1.2–1.8 MiB/s up, 1.5–1.6 MiB/s down, SHA-256 identical,
+0 CRC / 0 decrypt errors.  Details: `mangopi-mq-pro.md`, section 9b.
 
 ## Build
 

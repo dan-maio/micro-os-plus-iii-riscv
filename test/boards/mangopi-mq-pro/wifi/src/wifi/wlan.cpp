@@ -1341,12 +1341,11 @@ bool join(std::string_view ssid, std::string_view passphrase) noexcept {
         crypto::pbkdf2_sha1(
             {reinterpret_cast<const uint8_t*>(passphrase.data()), passphrase.size()},
             {reinterpret_cast<const uint8_t*>(ssid.data()), ssid.size()}, 4096, pmk);
-        serial.print("[WLAN] PMK derived (PBKDF2-SHA1, 4096 rounds) in {} ms: ",
+        // The PMK is the network's long-term secret (it joins the network and
+        // decrypts captured handshakes) and this console is copied to a RAM
+        // log anyone with xfel can read: report the timing only.
+        serial.print("[WLAN] PMK derived (PBKDF2-SHA1, 4096 rounds) in {} ms\r\n",
                      now_ms() - t0);
-        for (const auto byte : pmk) {
-            serial.print("{:02x}", static_cast<unsigned>(byte));
-        }
-        serial.write("\r\n");
     } else if (!passphrase.empty()) {
         serial.write("[WLAN] note: the network is open, the passphrase is ignored\r\n");
     }

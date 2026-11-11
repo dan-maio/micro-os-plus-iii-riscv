@@ -17,7 +17,14 @@ set (BOARD_TEST_QEMU_ONLY semihosting-test)
 
 # wifi-net needs the RTL8723DS on SDC1 and a real access point: there is
 # nothing for QEMU to model, so it has a hardware image only.
-set (BOARD_TEST_HWD_ONLY wifi-net)
+set (BOARD_TEST_HWD_ONLY wifi-net wifi-ram-disk)
+
+# wifi-ram-disk: wifi-net's radio + lwIP stack, unchanged, plus the 512 MiB
+# RAM disk (0x60000000, the upper half of the 1 GiB board) and the TCP file
+# server shared with the VisionFive 2 Lite tests, and FatFs (the copy under
+# that board's emmc-fs-test/fatfs).  The board has no Ethernet: Wi-Fi only.
+set (_mqpro_ramdisk_dir "${CMAKE_CURRENT_LIST_DIR}/../visionfive2-lite/vf2-wifi-ram-disk")
+set (_mqpro_fatfs_dir "${CMAKE_CURRENT_LIST_DIR}/../visionfive2-lite/emmc-fs-test/fatfs")
 
 # What wifi-net associates with.  No credentials in the repository: pass them
 # on the cmake line, e.g.
@@ -59,7 +66,7 @@ endfunction ()
 # test/boards/<board>/wifi (board support), not in the test directory, so that
 # the test stays one main.cpp.
 function (board_test_sources _app _out)
-  if ("${_app}" STREQUAL "wifi-net")
+  if ("${_app}" STREQUAL "wifi-net" OR "${_app}" STREQUAL "wifi-ram-disk")
     file (GLOB_RECURSE _wifi_sources CONFIGURE_DEPENDS
           "${UOS_BOARD_SRC_DIR}/wifi/src/*.cpp"
           "${UOS_BOARD_SRC_DIR}/wifi/src/*.c"
@@ -67,6 +74,13 @@ function (board_test_sources _app _out)
           "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lwip/src/core/*.c"
           "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lwip/src/core/ipv4/*.c"
           "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lwip/src/netif/*.c")
+    if ("${_app}" STREQUAL "wifi-ram-disk")
+      list (APPEND _wifi_sources
+            "${_mqpro_ramdisk_dir}/ram-disk.cpp"
+            "${_mqpro_ramdisk_dir}/file-server.cpp"
+            "${_mqpro_fatfs_dir}/source/ff.c"
+            "${_mqpro_fatfs_dir}/source/ffunicode.c")
+    endif ()
     set (${_out} ${_wifi_sources} PARENT_SCOPE)
   else ()
     set (${_out} "" PARENT_SCOPE)
@@ -74,7 +88,17 @@ function (board_test_sources _app _out)
 endfunction ()
 
 function (board_test_includes _app _out)
-  if ("${_app}" STREQUAL "wifi-net")
+  if ("${_app}" STREQUAL "wifi-ram-disk")
+    set (${_out}
+         "${UOS_BOARD_SRC_DIR}/wifi/src"
+         "${UOS_BOARD_SRC_DIR}/wifi/src/net"
+         "${UOS_BOARD_SRC_DIR}/wifi/src/wifi"
+         "${UOS_BOARD_SRC_DIR}/wifi/src/wifi/rtw"
+         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/lwip/src/include"
+         "${_mqpro_ramdisk_dir}"
+         "${_mqpro_fatfs_dir}/include"
+         PARENT_SCOPE)
+  elseif ("${_app}" STREQUAL "wifi-net")
     set (${_out}
          "${UOS_BOARD_SRC_DIR}/wifi/src"
          "${UOS_BOARD_SRC_DIR}/wifi/src/net"
@@ -88,7 +112,7 @@ function (board_test_includes _app _out)
 endfunction ()
 
 function (board_test_defines _app _out)
-  if ("${_app}" STREQUAL "wifi-net")
+  if ("${_app}" STREQUAL "wifi-net" OR "${_app}" STREQUAL "wifi-ram-disk")
     set (${_out}
          "WIFI_TEST_SSID=\"${WIFI_TEST_SSID}\""
          "WIFI_TEST_PASS=\"${WIFI_TEST_PASS}\""

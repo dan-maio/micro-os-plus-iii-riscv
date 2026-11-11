@@ -56,6 +56,7 @@ BEACON_PORT = 5001
 DEFAULT_TEST = "vf2-wifi-ram-disk"
 DEFAULT_TAG = "VF2-RAM-DISK"
 DEFAULT_BUILD = ROOT / "test" / "build-vf2-wifi"
+DEFAULT_BOARD = "visionfive2-lite"
 
 
 def local_prefix():
@@ -197,7 +198,8 @@ def transfer(host, files, keep):
     return board, failures, summary
 
 
-def main(test=DEFAULT_TEST, tag=DEFAULT_TAG, build=DEFAULT_BUILD, doc=None):
+def main(test=DEFAULT_TEST, tag=DEFAULT_TAG, build=DEFAULT_BUILD, doc=None,
+         board=DEFAULT_BOARD):
     parser = argparse.ArgumentParser(description=(doc or __doc__).split("\n\n")[0])
     parser.add_argument("files", nargs="*", help="files to send")
     parser.add_argument("--random", type=int, metavar="BYTES",
@@ -231,9 +233,9 @@ def main(test=DEFAULT_TEST, tag=DEFAULT_TAG, build=DEFAULT_BUILD, doc=None):
         env = dict(os.environ, BUILD=args.build)
         hw_log = Path(args.build) / ".hw-logs" / f"{test}-host-hwsh.txt"
         hw_log.parent.mkdir(parents=True, exist_ok=True)
-        print(f"loading the board test over JTAG (hw.sh, output in {hw_log}) ...")
+        print(f"loading the board test ({board} hw.sh, output in {hw_log}) ...")
         hw = subprocess.Popen(
-            [str(ROOT / "test" / "boards" / "visionfive2-lite" / "hw.sh"),
+            [str(ROOT / "test" / "boards" / board / "hw.sh"),
              test, "900"],
             stdout=open(hw_log, "w"), stderr=subprocess.STDOUT, env=env)
 

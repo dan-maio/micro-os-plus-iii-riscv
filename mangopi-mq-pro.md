@@ -74,6 +74,7 @@ test/boards/mangopi-mq-pro/
 test/mangopi-mq-pro/
   include/hw_result.hpp       hardware verdict/reset override
   wifi-net/                   the Wi-Fi + lwIP + threads test
+  wifi-ram-disk/              files over Wi-Fi into a 512 MiB RAM disk (section 9b)
   include/harness-suite.hpp   harness-suite verdict wrapper
   tests.cmake                 QEMU stand-in, harness suites, QEMU-only test
   clock-catchup/ clock-test/ exc-test/ mmu-test/ mos-test1/
@@ -187,7 +188,7 @@ The UART is purely for the user: the hardware verdict does not depend on it.
 
 ## 8. Results
 
-### Hardware (xfel only) — 10/10 PASS
+### Hardware (xfel only) — 12/12 PASS
 
 | # | Test | Result |
 |---|---|---|
@@ -202,6 +203,7 @@ The UART is purely for the user: the hardware verdict does not depend on it.
 | 9 | smp_test0 | PASS |
 | 10 | smp-test1 | PASS |
 | 11 | wifi-net | PASS (RTL8723DS: join, DHCP, ICMP) |
+| 12 | wifi-ram-disk | PASS (files over Wi-Fi into a 512 MiB RAM disk, SHA-256 identical; section 9b) |
 
 ### QEMU virt — 11/11 PASS
 
@@ -283,6 +285,12 @@ Verdict: PASS when the station joins, DHCP leases an address and the gateway
 answers an ICMP echo. Measured: 4/4 echo replies at 5–16 ms, 0 CRC and 0
 decrypt errors, DHCP lease `192.168.1.9`.
 
+The join log reports how long the PBKDF2 passphrase derivation took (about
+80 ms), and nothing more.  It used to print the derived 256-bit PMK in hex as
+well; the PMK is the network's long-term secret (it joins the network and
+decrypts captured handshakes) and this console is copied to the RAM log that
+anyone with xfel can read, so the line was cut back to the timing (2026-11-11).
+
 ### The RAM console log
 
 The runner never opens UART0, so every console character is also appended to
@@ -310,6 +318,74 @@ the microSD controller; SDC1, the RTL8723DS; USB0) is now mapped device.
 After a reset the BROM boots an inserted card, so `hw.sh` normally wants it
 out. With a card in (the SD monitor then has something to say), put the board
 in FEL from the card's own image and run with `NORESET=1`.
+
+## 9b. Files over Wi-Fi into a RAM disk (`wifi-ram-disk`)
+
+The PC sends files to the board over Wi-Fi, the board stores them in a
+**512 MiB RAM disk** with a FAT32 filesystem, lists it, and sends every file
+back; the PC compares.  The same test exists on the VisionFive 2 Lite over its
+Wi-Fi (`vf2-wifi-ram-disk`) and its Ethernet (`smp-net-ram-disk`), with the same
+RAM disk, the same file server and the same PC tools.  The MQ-Pro has no
+Ethernet: Wi-Fi is its only network.
+
+| piece | where | what |
+|---|---|---|
+| radio, WPA2, lwIP | `test/boards/mangopi-mq-pro/wifi/` | `wifi-net`'s stack, unchanged |
+| RAM disk | `test/visionfive2-lite/vf2-wifi-ram-disk/ram-disk.cpp` (shared) | `0x60000000..0x7fffffff`, FatFs drive 0. The image's window is `0x40000000..0x5fffffff` (`linker.ld`, 512 MiB; the console black box is at `0x58000000`), so the disk is the upper half of the **1 GiB** board. A probe writes two patterns 512 MiB apart (and restores them): on a 512 MiB board `0x60000000` would alias the image, and the probe refuses it |
+| filesystem | FatFs (`test/visionfive2-lite/emmc-fs-test/fatfs`) | FAT32, 4 KiB clusters, 511.5 MiB usable; created when the memory holds no FAT boot sector |
+| file server | `test/visionfive2-lite/vf2-wifi-ram-disk/file-server.cpp` (shared) | TCP **5000**: `ls`, `df`, `put`, `get`, `rm`, `format`, `verdict`; after a `put` the file is re-read through FatFs and that CRC-32 is returned |
+| beacon | same file | UDP broadcast to **5001** once a second: `MQPRO-RAM-DISK <ip> 5000` |
+| test | `test/mangopi-mq-pro/wifi-ram-disk/main.cpp` | one `net` thread, then the verdict |
+| PC side | `test/mangopi-mq-pro/wifi-ram-disk/wifi-ram-disk-host.py` | a wrapper around the shared runner `vf2-wifi-ram-disk-host.py`, with this board's `hw.sh` |
+
+Threads:
+
+| thread | priority | stack | period | role |
+|---|---|---|---|---|
+| `net` | above normal | 64 KiB | 2 ms | **owns** SDC1 + RTL8723DS, lwIP (`NO_SYS`) and the RAM disk's FatFs: every file operation runs in an lwIP callback on this thread, and the beacon is an lwIP timer, so this one thread is the whole lock |
+| `os_main` | normal | — | 100 ms | starts it, waits for the verdict (600 s watchdog), reports |
+
+Run (board in FEL, microSD removed):
+
+```sh
+cmake -S . -B test/build-mqpro -G Ninja \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/riscv-none-elf.cmake \
+      -DBOARD=mangopi-mq-pro -DWIFI_TEST_SSID=myssid -DWIFI_TEST_PASS=pass
+cmake --build test/build-mqpro --target wifi-ram-disk-hwd -j
+test/mangopi-mq-pro/wifi-ram-disk/wifi-ram-disk-host.py \
+    test.bin photo.png --random 2097152
+```
+
+The script never opens UART0:
+
+1. runs `hw.sh wifi-ram-disk` (xfel: DDR, load at `0x40000000`, exec);
+2. finds the board by its beacon, or -- when a host firewall drops the
+   broadcast -- by scanning the local /24 for the file protocol on TCP 5000;
+3. sends every file and checks the CRC-32 the board read back from the disk;
+4. lists the RAM disk and checks every name and size;
+5. reads every file back as `<file>.bak` and compares SHA-256;
+6. sends `verdict PASS|FAIL <summary>`: the board records it in the RTC and
+   resets to FEL; `hw.sh` reads the verdict and prints the RAM console log.
+
+`--no-load`, `--host IP`, `--keep`, `--build DIR` as on the VisionFive 2.
+
+Measured (2026-11-11, <SSID>, WPA2-PSK with a TKIP group key):
+
+| | |
+|---|---|
+| board on the network | 8.9 s after the start (xfel load, radio up, WPA2 join, DHCP `192.168.1.9`); 5.8 s in a run where the first join was accepted |
+| PC → RAM disk | 128 KiB / 857 KiB / 2 MiB at **1237 / 1721 / 1776 KiB/s**; the board wrote them in 92 / 487 / 1140 ms; CRC-32 of each stored file matches |
+| RAM disk → PC | **1492 / 1580 / 1630 KiB/s**; every `<file>.bak` SHA-256 identical |
+| radio | 3531 frames received, 0 CRC, 0 decrypt errors; 3262 data frames sent, 0 errors |
+| verdict | `wifi-ram-disk PASS` (RTC) |
+
+About 1.5–1.8 MiB/s both ways: what one 802.11g link without aggregation, with
+every frame through the SDIO PIO FIFO, carries.  Unlike the VisionFive 2's
+AIC8800, the first download is not slower than the others.
+
+The first join after a reload is sometimes refused (the access point still
+holds the previous run's association for the same MAC); the test tries three
+times.
 
 ## 10. Harness suites
 

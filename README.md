@@ -750,6 +750,11 @@ data endpoints on small TRB rings closed by a LINK TRB, transfers held until
 | smp-net-ram-disk | the same RAM-disk file transfer **over Ethernet** (GMAC0, no Wi-Fi, no USB console): the GMAC driver and lwIP glue of smp-test-usb-cdc-net, unchanged, plus the RAM disk and file server shared with vf2-wifi-ram-disk (`ram-disk.cpp`, `file-server.cpp` in that directory). Beacon `VF2-NET-RAM-DISK <ip> 5000` on UDP 5001. Threads: eth-rx [cpu 1] (the file server's TCP callbacks and every FatFs call run here, inside `net_lwip::input()`), net [2] (lwIP timers, the beacon, carrier), app [3] (carrier, DHCP, wait for the verdict), stats and a 600 s watchdog [0]. lwIP and FatFs are serialised by net-lwip.cpp's one lwIP mutex: the server does nothing outside lwIP callbacks and timers. Host: `smp-net-ram-disk/smp-net-ram-disk-host.py` (the same runner as vf2-wifi-ram-disk). Diagnostic build options, off by default: `NET_RAMDISK_DHCP_TRACE` (lwIP DHCP_DEBUG + every received DHCP frame decoded) and `NET_RAMDISK_FALLBACK_IP` (a fixed address after a failed DHCP; the verdict stays FAIL). It needed the MAC speed/duplex fix (fe5f6ff): before it, every DHCP DISCOVER left the DMA without reaching the wire. **PASS** (2026-11-11): board on the LAN 10.1 s after the start, 128 KiB / 857 KiB / 2 MiB stored at 11.0 / 14.4 / 13.9 MiB/s with matching CRC-32, read back at 12.1 / 29.7 / 32.0 MiB/s, SHA-256 identical; gmac err 0/0, unf 0, ovf 0; whole run 12 s |
 | run | board at the U-Boot prompt, Ethernet cabled to the LAN; `ninja -C test/build-vf2 smp-net-ram-disk-hwd`, then `test/visionfive2-lite/smp-net-ram-disk/smp-net-ram-disk-host.py file1 file2 --random 2097152` |
 
+The same RAM-disk file transfer runs on the **MangoPi MQ-Pro** over its Wi-Fi
+(RTL8723DS), as `test/mangopi-mq-pro/wifi-ram-disk` (PASS, 1.2–1.8 MiB/s both
+ways; `mangopi-mq-pro.md`, section 9b), with the same RAM disk, file server
+and PC runner.
+
 #### vf2-wifi-ram-disk / smp-net-ram-disk: the PC scripts
 
 Both live in `test/visionfive2-lite/vf2-wifi-ram-disk/` and run on the PC,
@@ -765,7 +770,10 @@ In short: `wifi_fs.py` is the tool, `vf2-wifi-ram-disk-host.py` is the test
 that uses it.  `smp-net-ram-disk/smp-net-ram-disk-host.py` is a small wrapper
 that runs the same runner for the Ethernet test (test name
 `smp-net-ram-disk`, beacon tag `VF2-NET-RAM-DISK`, build directory
-`test/build-vf2`); `wifi_fs.py` works unchanged over Ethernet.
+`test/build-vf2`); `wifi_fs.py` works unchanged over Ethernet.  The MangoPi's
+`test/mangopi-mq-pro/wifi-ram-disk/wifi-ram-disk-host.py` is the same kind of
+wrapper (board `mangopi-mq-pro`, whose `hw.sh` loads over xfel; beacon tag
+`MQPRO-RAM-DISK`; build directory `test/build-mqpro`).
 
 ```sh
 # the whole test (board at the U-Boot prompt)
