@@ -748,6 +748,42 @@ data endpoints on small TRB rings closed by a LINK TRB, transfers held until
 | vf2-wifi-ram-disk | files **over Wi-Fi into a 512 MiB RAM disk**: smp-wifi's AIC8800 (SDIO1) + WPA2 + lwIP code, unchanged, plus a RAM disk at `0x60000000..0x7fffffff` (FatFs drive 0, FAT32, 4 KiB clusters, created at start; a probe checks the 512 MiB are distinct memory) and a TCP file server on port 5000 with the MangoPi MQ-Pro's protocol (`ls df put get rm format`, plus `verdict`). The board joins with the build's `WIFI_TEST_SSID`/`WIFI_TEST_PASS`, then broadcasts `VF2-RAM-DISK <ip> 5000` on UDP 5001 once a second. After a `put` it re-reads the file through FatFs and returns that CRC-32. The radio thread [cpu 1] owns lwIP and FatFs; blink [2], stats + 600 s watchdog [3]. Host: `vf2-wifi-ram-disk/vf2-wifi-ram-disk-host.py` runs `hw.sh`, finds the board (beacon, or a /24 scan for TCP 5000 when a firewall such as ufw drops the broadcast), sends the files, lists the disk, reads each back as `<file>.bak`, compares SHA-256 and sends the verdict; the board then prints RESULT. UART0 is never read. **PASS** (2026-11-11, Pico probe): beacon 29.7 s after the start (load + radio + join + DHCP), 128 KiB / 857 KiB / 2 MiB stored at 1440 / 1412 / 1555 KiB/s with matching CRC-32 (`6240cbac`, `f440ff5a`, random), read back at 92 / 584 / 3621 KiB/s (the small first `get` is TCP slow start on the board's side), SHA-256 identical; 0 SDIO I/O errors, 0 timeouts; threads on harts 1/2/3/0; whole run 38.5 s |
 | run | board at the U-Boot prompt; build in `test/build-vf2-wifi` (configured with `-DWIFI_TEST_SSID=... -DWIFI_TEST_PASS=...`), `ninja -C test/build-vf2-wifi vf2-wifi-ram-disk-hwd`, then `test/visionfive2-lite/vf2-wifi-ram-disk/vf2-wifi-ram-disk-host.py file1 file2 --random 2097152` (it calls hw.sh itself; `--no-load` / `--host IP` if the test is already running) |
 
+#### vf2-wifi-ram-disk: the two PC scripts
+
+Both live in `test/visionfive2-lite/vf2-wifi-ram-disk/` and run on the PC,
+not on the board. Neither opens the UART (`ttyACM0` stays the user's
+console); everything goes over JTAG (hw.sh) and Wi-Fi.
+
+| script | what it is | what it does |
+|---|---|---|
+| `wifi_fs.py` | the **file-transfer client** (a tool and a Python class, `wifi_fs.Board`) | connects to the board on TCP 5000 and speaks its file protocol: `ls`, `df`, `put`, `get`, `rm`, `format`, `verdict`. After a `put` it checks the CRC-32 the board computed from the *stored* file; after a `get` it checks the received data against the board's CRC-32. A copy of the MangoPi MQ-Pro's `host/wifi_fs.py` (same protocol), with `verdict` added |
+| `vf2-wifi-ram-disk-host.py` | the **test runner**: the whole test in one command, using `wifi_fs.py` for every transfer | 1. starts `hw.sh` (JTAG load into DDR);<br>2. finds the board: its UDP broadcast on port 5001 (`VF2-RAM-DISK <ip> 5000`), or, if a host firewall such as ufw drops it, a scan of the local /24 for a host answering the file protocol on TCP 5000;<br>3. uploads every file to the RAM disk;<br>4. lists the RAM disk and checks every name and size;<br>5. downloads every file back as `<file>.bak` next to the original and compares SHA-256;<br>6. sends `verdict PASS\|FAIL <summary>`: the board prints `RESULT` and makes its semihosting exit;<br>7. waits for `hw.sh` and prints its verdict line. Exit status 0 only when the transfers verified **and** hw.sh reported PASS |
+
+In short: `wifi_fs.py` is the tool, `vf2-wifi-ram-disk-host.py` is the test
+that uses it.
+
+```sh
+# the whole test (board at the U-Boot prompt)
+test/visionfive2-lite/vf2-wifi-ram-disk/vf2-wifi-ram-disk-host.py \
+    test.bin photo.png --random 2097152
+
+#   --no-load     the board test is already running (do not call hw.sh)
+#   --host IP     skip the search, use this address
+#   --build DIR   build directory (default test/build-vf2-wifi)
+#   --keep        leave the files on the RAM disk
+
+# the tool alone, while the test runs on the board
+cd test/visionfive2-lite/vf2-wifi-ram-disk
+python3 wifi_fs.py -H 192.168.1.128 df
+python3 wifi_fs.py -H 192.168.1.128 put photo.png
+python3 wifi_fs.py -H 192.168.1.128 ls
+python3 wifi_fs.py -H 192.168.1.128 get photo.png copy.png
+python3 wifi_fs.py -H 192.168.1.128 rm photo.png
+```
+
+The board ends its run only on a `verdict` (or after its 600 s watchdog),
+so when `wifi_fs.py` is used by hand the test keeps serving until then.
+
 Before (2026-11-06, DAPLink, 11/11 PASS):
 - SMP on the four U74 (`OS_NCPU = 4`):
   - **smp-test2**: one worker per core, every beat read from mhartid on its
