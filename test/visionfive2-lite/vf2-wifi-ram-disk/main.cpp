@@ -91,7 +91,6 @@ namespace
   {
     wlan::poll ();
     wifi_net::poll ();
-    file_server::poll ();
   }
 
   // Bring everything up; false = the step in failed_step failed.
@@ -116,7 +115,7 @@ namespace
         return false;
       }
     failed_step = "file server";
-    if (!file_server::start ())
+    if (!file_server::start ("VF2-RAM-DISK"))
       {
         return false;
       }
@@ -185,7 +184,6 @@ namespace
             service ();
             sysclock.sleep_for (2);
           }
-        file_server::list_files ("at the end");
         finish (file_server::verdict_pass ());
       }
 

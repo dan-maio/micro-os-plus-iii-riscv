@@ -58,6 +58,15 @@
 #include <cstdio>
 #include <cstring>
 
+#if defined(NET_TEST_STATIC_IP)
+// Diagnostics: a fixed address instead of DHCP (NET_TEST_STATIC_IP, e.g.
+// 0xC0A801FA = 192.168.1.250/24, gateway 192.168.1.1).  Set in os_main()
+// before any other thread runs, so the lwIP calls need no lock; set_link()
+// -- which is what starts DHCP -- is then never called.
+#include "lwip/ip4_addr.h"
+#include "lwip/netif.h"
+#endif
+
 using namespace os::rtos;
 
 namespace
@@ -240,7 +249,9 @@ namespace
         if (up != was_up)
           {
             was_up = up;
+#if !defined(NET_TEST_STATIC_IP)
             net_lwip::set_link (up);
+#endif
             log ("[net] carrier %s (%u Mb/s %s duplex)\n",
                  up ? "up" : "lost",
                  static_cast<unsigned> (gmac::status ().speed_mbps),
@@ -377,6 +388,7 @@ os_main (int /*argc*/, char* /*argv*/[])
   gmac::set_trace (&net_lwip::log);
   const bool gmac_ok = gmac::start (kMac);
   net_lwip::log ("[gmac] start returned\n");
+
   log ("[gmac] version 0x%04x, dma reset %s, phy id 0x%04x:0x%04x, link %s "
        "%u Mb/s%s%s\n",
        static_cast<unsigned> (gmac::status ().version),
@@ -397,10 +409,25 @@ os_main (int /*argc*/, char* /*argv*/[])
       log ("[net] lwIP init failed\n");
       hw_result::fail ();
     }
+#if defined(NET_TEST_STATIC_IP)
+  {
+    constexpr std::uint32_t a = NET_TEST_STATIC_IP;
+    ip4_addr_t ip, mask, gw;
+    IP4_ADDR (&ip, a >> 24, (a >> 16) & 0xff, (a >> 8) & 0xff, a & 0xff);
+    IP4_ADDR (&mask, 255, 255, 255, 0);
+    IP4_ADDR (&gw, a >> 24, (a >> 16) & 0xff, (a >> 8) & 0xff, 1);
+    netif_set_addr (netif_default, &ip, &mask, &gw);
+    netif_set_link_up (netif_default);
+    log ("[net] STATIC address %u.%u.%u.%u/24, gateway %u.%u.%u.1 (no DHCP)\n",
+         ip4_addr1 (&ip), ip4_addr2 (&ip), ip4_addr3 (&ip), ip4_addr4 (&ip),
+         ip4_addr1 (&gw), ip4_addr2 (&gw), ip4_addr3 (&gw));
+  }
+#else
   if (gmac::status ().link)
     {
       net_lwip::set_link (true);
     }
+#endif
 
   net_lwip::log ("[test] creating threads: stacks usb 32K console 32K rx 64K "
                  "net 64K app 128K stats 32K mon 32K\n");

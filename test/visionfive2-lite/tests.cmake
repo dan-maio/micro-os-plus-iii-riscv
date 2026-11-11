@@ -90,6 +90,13 @@ set (_vf2_usb_fs_tests smp-test-usb-cdc-file-fs)
 
 # USB CDC console *and* a real network: TinyUSB + GMAC0 + lwIP over it.
 set (_vf2_usb_net_tests smp-test-usb-cdc-net)
+# smp-net-ram-disk: the same GMAC0 + lwIP stack (Ethernet only, no Wi-Fi, no
+# USB console), plus the 512 MiB RAM disk and the file server shared with
+# vf2-wifi-ram-disk (ram-disk.cpp, file-server.cpp in that directory) and
+# FatFs.  The USB core sources stay in the link only for vf2_dcache_flush()
+# (usb/vf2-usb.cpp), which the GMAC's DMA cache maintenance uses.
+set (_vf2_net_ramdisk_tests smp-net-ram-disk)
+set (_vf2_ramdisk_dir "${CMAKE_CURRENT_LIST_DIR}/vf2-wifi-ram-disk")
 set (_vf2_net_dir "${CMAKE_CURRENT_LIST_DIR}/../boards/visionfive2-lite/net")
 set (_vf2_lwip_dir "${CMAKE_CURRENT_LIST_DIR}/../third_party/lwip")
 
@@ -97,6 +104,12 @@ set (NET_TEST_INHERIT_GMAC OFF CACHE BOOL
      "smp-test-usb-cdc-net: use the GMAC bring-up U-Boot already did")
 set (NET_TEST_STAY_ALIVE OFF CACHE BOOL
      "smp-test-usb-cdc-net: keep running after the verdict (JTAG bring-up)")
+set (NET_RAMDISK_FALLBACK_IP "" CACHE STRING
+     "smp-net-ram-disk: diagnostics, static address after a failed DHCP (e.g. 0xC0A801FA)")
+set (NET_RAMDISK_DHCP_TRACE OFF CACHE BOOL
+     "smp-net-ram-disk: trace the DHCP exchange (lwIP DHCP_DEBUG + received DHCP frames)")
+set (NET_TEST_STATIC_IP "" CACHE STRING
+     "smp-test-usb-cdc-net: diagnostics, a fixed address instead of DHCP (e.g. 0xC0A801FA = 192.168.1.250/24)")
 set (NET_TEST_PEER "" CACHE STRING
      "smp-test-usb-cdc-net: optional second host on the LAN to ping")
 
@@ -147,6 +160,18 @@ function (board_test_sources _app _out)
          ${_wifi_lwip}
          ${_extra}
          PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_net_ramdisk_tests)
+    file (GLOB _net_lwip CONFIGURE_DEPENDS
+          "${_vf2_lwip_dir}/src/core/*.c"
+          "${_vf2_lwip_dir}/src/core/ipv4/*.c"
+          "${_vf2_lwip_dir}/src/netif/*.c")
+    set (${_out}
+         ${UOS_BOARD_USB_CORE_SOURCES} ${UOS_BOARD_USB_CDC_RAW_SOURCES}
+         "${_vf2_net_dir}/gmac.cpp" "${_vf2_net_dir}/net-lwip.cpp"
+         ${_net_lwip}
+         "${_vf2_ramdisk_dir}/ram-disk.cpp" "${_vf2_ramdisk_dir}/file-server.cpp"
+         "${_vf2_fatfs_dir}/source/ff.c" "${_vf2_fatfs_dir}/source/ffunicode.c"
+         PARENT_SCOPE)
   elseif ("${_app}" IN_LIST _vf2_usb_net_tests)
     file (GLOB _net_lwip CONFIGURE_DEPENDS
           "${_vf2_lwip_dir}/src/core/*.c"
@@ -190,6 +215,14 @@ function (board_test_includes _app _out)
          "${_vf2_net_dir}"
          "${_vf2_lwip_dir}/src/include"
          PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_net_ramdisk_tests)
+    set (${_out}
+         ${UOS_BOARD_USB_CDC_INCLUDE} ${UOS_BOARD_USB_INCLUDE}
+         "${_vf2_ramdisk_dir}"
+         "${_vf2_fatfs_dir}/include"
+         "${_vf2_net_dir}"
+         "${_vf2_lwip_dir}/src/include"
+         PARENT_SCOPE)
   elseif ("${_app}" IN_LIST _vf2_usb_net_tests)
     set (${_out}
          ${UOS_BOARD_USB_CDC_INCLUDE} ${UOS_BOARD_USB_INCLUDE}
@@ -217,6 +250,20 @@ function (board_test_defines _app _out)
          "WIFI_TEST_GATEWAY=\"${WIFI_TEST_GATEWAY}\""
          "WIFI_TEST_PEER=\"${WIFI_TEST_PEER}\""
          PARENT_SCOPE)
+  elseif ("${_app}" IN_LIST _vf2_net_ramdisk_tests)
+    set (_d VF2_SMP_AUTOSTART=1)
+    if (NET_RAMDISK_DHCP_TRACE)
+      # lwIP's own DHCP trace (LWIP_DEBUGF -> kprintf -> the console log)
+      # and the test's decoder of every DHCP frame received.
+      list (APPEND _d NET_RAMDISK_DHCP_TRACE=1 LWIP_DEBUG=1
+                      DHCP_DEBUG=LWIP_DBG_ON)
+    endif ()
+    if (NET_RAMDISK_FALLBACK_IP)
+      # Diagnostics: after a failed DHCP, carry on with this address (given
+      # as 0xC0A801FA for 192.168.1.250); the verdict stays FAIL.
+      list (APPEND _d NET_RAMDISK_FALLBACK_IP=${NET_RAMDISK_FALLBACK_IP})
+    endif ()
+    set (${_out} ${_d} PARENT_SCOPE)
   elseif ("${_app}" IN_LIST _vf2_usb_net_tests)
     set (_d VF2_SMP_AUTOSTART=1 "NET_TEST_PEER=\"${NET_TEST_PEER}\"")
     if (NET_TEST_STAY_ALIVE)
@@ -224,6 +271,9 @@ function (board_test_defines _app _out)
     endif ()
     if (NET_TEST_INHERIT_GMAC)
       list (APPEND _d NET_TEST_INHERIT_GMAC=1)
+    endif ()
+    if (NET_TEST_STATIC_IP)
+      list (APPEND _d NET_TEST_STATIC_IP=${NET_TEST_STATIC_IP})
     endif ()
     set (${_out} ${_d} PARENT_SCOPE)
   elseif ("${_app}" IN_LIST _vf2_no_autostart)

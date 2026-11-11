@@ -51,6 +51,12 @@ import wifi_fs                  # noqa: E402
 
 BEACON_PORT = 5001
 
+# What this runner drives by default; smp-net-ram-disk-host.py (the Ethernet
+# test) calls main() with its own values.
+DEFAULT_TEST = "vf2-wifi-ram-disk"
+DEFAULT_TAG = "VF2-RAM-DISK"
+DEFAULT_BUILD = ROOT / "test" / "build-vf2-wifi"
+
 
 def local_prefix():
     """The PC's own address on the LAN, as 'a.b.c.' (for the /24 scan)."""
@@ -92,7 +98,7 @@ def scan_subnet():
     return None
 
 
-def wait_for_board(timeout, hw=None):
+def wait_for_board(timeout, hw=None, tag=DEFAULT_TAG):
     """Return the board's IP, or None on timeout.
 
     Two ways, alternated: the board's UDP broadcast on port 5001 (fast, but
@@ -113,7 +119,7 @@ def wait_for_board(timeout, hw=None):
             try:
                 data, _ = sock.recvfrom(256)
                 fields = data.decode(errors="replace").split()
-                if len(fields) >= 2 and fields[0] == "VF2-RAM-DISK":
+                if len(fields) >= 2 and fields[0] == tag:
                     print(f"  beacon received from {fields[1]}")
                     return fields[1]
             except socket.timeout:
@@ -191,16 +197,16 @@ def transfer(host, files, keep):
     return board, failures, summary
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+def main(test=DEFAULT_TEST, tag=DEFAULT_TAG, build=DEFAULT_BUILD, doc=None):
+    parser = argparse.ArgumentParser(description=(doc or __doc__).split("\n\n")[0])
     parser.add_argument("files", nargs="*", help="files to send")
     parser.add_argument("--random", type=int, metavar="BYTES",
                         help="also test a generated file of this size")
     parser.add_argument("--no-load", action="store_true",
                         help="the board test is already running")
     parser.add_argument("--host", help="board IP address (skip the beacon)")
-    parser.add_argument("--build", default=str(ROOT / "test" / "build-vf2-wifi"),
-                        help="CMake build directory with vf2-wifi-ram-disk-hwd")
+    parser.add_argument("--build", default=str(build),
+                        help=f"CMake build directory with {test}-hwd")
     parser.add_argument("--beacon-timeout", type=float, default=240.0,
                         help="seconds to wait for the board (load + join)")
     parser.add_argument("--keep", action="store_true",
@@ -209,7 +215,7 @@ def main():
 
     files = [Path(name) for name in args.files]
     if args.random:
-        generated = Path(f"vf2_random_{args.random}.bin")
+        generated = Path(f"{test.replace('-', '_')}_random_{args.random}.bin")
         generated.write_bytes(os.urandom(args.random))
         files.append(generated)
     if not files:
@@ -223,12 +229,12 @@ def main():
     hw = None
     if not args.no_load:
         env = dict(os.environ, BUILD=args.build)
-        hw_log = Path(args.build) / ".hw-logs" / "vf2-wifi-ram-disk-host-hwsh.txt"
+        hw_log = Path(args.build) / ".hw-logs" / f"{test}-host-hwsh.txt"
         hw_log.parent.mkdir(parents=True, exist_ok=True)
         print(f"loading the board test over JTAG (hw.sh, output in {hw_log}) ...")
         hw = subprocess.Popen(
             [str(ROOT / "test" / "boards" / "visionfive2-lite" / "hw.sh"),
-             "vf2-wifi-ram-disk", "900"],
+             test, "900"],
             stdout=open(hw_log, "w"), stderr=subprocess.STDOUT, env=env)
 
     start = time.monotonic()
@@ -236,7 +242,7 @@ def main():
     if not host:
         print(f"waiting for the board (beacon on UDP {BEACON_PORT}, or a scan "
               f"for TCP {wifi_fs.DEFAULT_TCP_PORT}) ...")
-        host = wait_for_board(args.beacon_timeout, hw)
+        host = wait_for_board(args.beacon_timeout, hw, tag)
         if not host:
             print("error: no beacon from the board", file=sys.stderr)
             if hw is not None:
@@ -277,8 +283,8 @@ def main():
     print("waiting for the board's RESULT (hw.sh) ...")
     hw.wait()
     log_tail = (Path(args.build) / ".hw-logs" /
-                "vf2-wifi-ram-disk-host-hwsh.txt").read_text(errors="replace")
-    verdict_line = [l for l in log_tail.splitlines() if l.startswith("vf2-wifi-ram-disk")]
+                f"{test}-host-hwsh.txt").read_text(errors="replace")
+    verdict_line = [l for l in log_tail.splitlines() if l.startswith(test)]
     print(verdict_line[-1] if verdict_line else f"hw.sh exit status {hw.returncode}")
     return 0 if passed and hw.returncode == 0 else 1
 

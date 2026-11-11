@@ -18,8 +18,6 @@
 #include "file-server.hpp"
 #include "ram-disk.hpp"
 
-#include "wifi/wifi-platform.hpp"
-
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -29,15 +27,26 @@ extern "C"
 {
 #include <chan-fatfs/ff.h>
 
+#include "lwip/dhcp.h"
 #include "lwip/ip_addr.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
+#include "lwip/sys.h"
 #include "lwip/tcp.h"
+#include "lwip/timeouts.h"
 #include "lwip/udp.h"
+
+  // Both network stacks of this board provide it (net-lwip.cpp,
+  // wifi-lwip.cpp): printf to the console, one writer at a time.
+  void kprintf (const char* format, ...)
+      __attribute__ ((format (printf, 1, 2)));
 }
 
 namespace file_server
 {
+  void
+  list_files (const char* title);
+
   namespace
   {
     // ------------------------------------------------------------ CRC-32
@@ -117,7 +126,14 @@ namespace file_server
     char verdict_msg[120] = "";
 
     udp_pcb* beacon = nullptr;
-    std::uint32_t last_beacon_ms = 0;
+    const char* beacon_tag = "VF2-RAM-DISK";
+
+    void
+    beacon_tick (void*);
+
+    // A static address requested from another thread, applied in the timer.
+    volatile bool static_pending = false;
+    std::uint32_t static_ip = 0, static_mask = 0, static_gw = 0;
 
     // ---------------------------------------------------------- output
     void
@@ -203,7 +219,7 @@ namespace file_server
       f_close (&outgoing);
       kprintf ("[file] sent %s (%llu bytes) in %u ms\n", client.path + 1,
                static_cast<unsigned long long> (client.size),
-               static_cast<unsigned> (wifi_platform::millis ()
+               static_cast<unsigned> (sys_now ()
                                       - client.started_ms));
       ++cnt.files_sent;
       client.state = mode::command;
@@ -401,7 +417,7 @@ namespace file_server
                client.path + 1,
                static_cast<unsigned long long> (client.size),
                static_cast<unsigned> (stored_crc),
-               static_cast<unsigned> (wifi_platform::millis ()
+               static_cast<unsigned> (sys_now ()
                                       - client.started_ms));
       ++cnt.files_received;
       say ("OK ");
@@ -516,7 +532,7 @@ namespace file_server
           client.remaining = size;
           client.crc = 0xffffffffu;
           client.write_failed = false;
-          client.started_ms = wifi_platform::millis ();
+          client.started_ms = sys_now ();
           client.state = mode::receiving;
           say ("READY\n");
           if (size == 0)
@@ -542,7 +558,7 @@ namespace file_server
             }
           client.size = size;
           client.remaining = size;
-          client.started_ms = wifi_platform::millis ();
+          client.started_ms = sys_now ();
           client.state = mode::sending;
           say ("DATA ");
           say_number (size);
@@ -590,6 +606,9 @@ namespace file_server
           got_verdict = true;
           kprintf ("[file] verdict from the PC: %s %s\n",
                    verdict_ok ? "PASS" : "FAIL", verdict_msg);
+          // The final listing here, in the lwIP callback, where FatFs is
+          // already serialised with every other file operation.
+          list_files ("at the end");
           say ("OK\n");
         }
       else
@@ -775,6 +794,16 @@ namespace file_server
     return cnt;
   }
 
+  void
+  request_static_address (std::uint32_t ip, std::uint32_t mask,
+                          std::uint32_t gateway)
+  {
+    static_ip = ip;
+    static_mask = mask;
+    static_gw = gateway;
+    static_pending = true;
+  }
+
   bool
   verdict_received (void)
   {
@@ -842,8 +871,9 @@ namespace file_server
   }
 
   bool
-  start (void)
+  start (const char* tag)
   {
+    beacon_tag = tag;
     tcp_pcb* pcb = tcp_new_ip_type (IPADDR_TYPE_V4);
     if (pcb == nullptr || tcp_bind (pcb, IP_ANY_TYPE, tcp_port) != ERR_OK)
       {
@@ -863,41 +893,64 @@ namespace file_server
       {
         ip_set_option (beacon, SOF_BROADCAST);
       }
-    kprintf ("[file] RAM-disk file server on TCP port %u, beacon on UDP %u\n",
-             tcp_port, beacon_port);
+    sys_timeout (1000, beacon_tick, nullptr);
+    kprintf ("[file] RAM-disk file server on TCP port %u, beacon \"%s\" on "
+             "UDP %u\n",
+             tcp_port, beacon_tag, beacon_port);
     return true;
   }
 
-  void
-  poll (void)
+  namespace
   {
-    netif* n = netif_default;
-    if (beacon == nullptr || n == nullptr || !netif_is_link_up (n)
-        || ip4_addr_isany_val (*netif_ip4_addr (n)))
-      {
-        return;
-      }
-    const std::uint32_t now = wifi_platform::millis ();
-    if (now - last_beacon_ms < 1000)
-      {
-        return;
-      }
-    last_beacon_ms = now;
-    const ip4_addr_t* a = netif_ip4_addr (n);
-    char text[64];
-    const int len = std::snprintf (
-        text, sizeof (text), "VF2-RAM-DISK %u.%u.%u.%u %u\n", ip4_addr1 (a),
-        ip4_addr2 (a), ip4_addr3 (a), ip4_addr4 (a), tcp_port);
-    pbuf* p = pbuf_alloc (PBUF_TRANSPORT, static_cast<u16_t> (len), PBUF_RAM);
-    if (p == nullptr)
-      {
-        return;
-      }
-    std::memcpy (p->payload, text, static_cast<std::size_t> (len));
-    if (udp_sendto (beacon, p, IP_ADDR_BROADCAST, beacon_port) == ERR_OK)
-      {
-        ++cnt.beacons;
-      }
-    pbuf_free (p);
-  }
+    // The beacon is an lwIP timer: it runs inside sys_check_timeouts(), on
+    // whatever thread drives the stack's timers and under that stack's own
+    // serialisation (the radio thread for Wi-Fi, the lwIP mutex for the
+    // GMAC), so nothing here needs a lock of its own.
+    void
+    beacon_tick (void*)
+    {
+      sys_timeout (1000, beacon_tick, nullptr);
+      netif* n = netif_default;
+      if (static_pending && n != nullptr)
+        {
+          static_pending = false;
+          ip4_addr_t a, m, g;
+          IP4_ADDR (&a, static_ip >> 24, (static_ip >> 16) & 0xff,
+                    (static_ip >> 8) & 0xff, static_ip & 0xff);
+          IP4_ADDR (&m, static_mask >> 24, (static_mask >> 16) & 0xff,
+                    (static_mask >> 8) & 0xff, static_mask & 0xff);
+          IP4_ADDR (&g, static_gw >> 24, (static_gw >> 16) & 0xff,
+                    (static_gw >> 8) & 0xff, static_gw & 0xff);
+          dhcp_stop (n);
+          netif_set_addr (n, &a, &m, &g);
+          kprintf ("[file] static address %u.%u.%u.%u (DHCP stopped)\n",
+                   ip4_addr1 (&a), ip4_addr2 (&a), ip4_addr3 (&a),
+                   ip4_addr4 (&a));
+        }
+      if (beacon == nullptr || n == nullptr || !netif_is_link_up (n)
+          || ip4_addr_isany_val (*netif_ip4_addr (n)))
+        {
+          return;
+        }
+      const ip4_addr_t* a = netif_ip4_addr (n);
+      char text[64];
+      const int len = std::snprintf (
+          text, sizeof (text), "%s %u.%u.%u.%u %u\n", beacon_tag,
+          ip4_addr1 (a), ip4_addr2 (a), ip4_addr3 (a), ip4_addr4 (a),
+          tcp_port);
+      pbuf* p
+          = pbuf_alloc (PBUF_TRANSPORT, static_cast<u16_t> (len), PBUF_RAM);
+      if (p == nullptr)
+        {
+          return;
+        }
+      std::memcpy (p->payload, text, static_cast<std::size_t> (len));
+      if (udp_sendto (beacon, p, IP_ADDR_BROADCAST, beacon_port) == ERR_OK)
+        {
+          ++cnt.beacons;
+        }
+      pbuf_free (p);
+    }
+  } // namespace
+
 } // namespace file_server
