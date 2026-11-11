@@ -227,6 +227,10 @@ namespace
   constinit u32 mdio_last_addr = 0;
   constinit u32 mdio_last_data = 0;
 
+  // What FES/DM currently hold, so a link that resolves later can be applied.
+  constinit unsigned applied_speed = 0;
+  constinit bool applied_full_duplex = false;
+
   // GBUSY is not only a status: writing it as 1 *starts* the frame (Linux
   // stmmac_mdio_format_addr() ORs MII_ADDR_GBUSY into the command).  Without
   // it no frame is sent at all, the bit reads back 0 at once, and the data
@@ -769,6 +773,8 @@ namespace gmac
       {
         config |= MAC_CONFIG_DM;
       }
+    applied_speed = st.link ? st.speed_mbps : 0;
+    applied_full_duplex = st.link && st.full_duplex;
     r (MAC_CONFIG) = config;
 
     // 8. Start the DMA, then the MAC.
@@ -777,6 +783,38 @@ namespace gmac
     r (MAC_CONFIG) = config | MAC_CONFIG_RE | MAC_CONFIG_TE;
 
     return true;
+  }
+
+  // Speed and duplex are *not* constant: the PHY is still negotiating when
+  // start() runs on a cold board, and the MAC then latched 100/half.  On a
+  // 1 Gb/s link that leaves the transmitter sending at the wrong rate: the
+  // frames never appear on the wire (no error anywhere -- the DMA drains its
+  // ring happily), while reception keeps working because the RGMII receive
+  // clock does not depend on FES.  So re-apply them whenever they change.
+  void
+  apply_speed (void)
+  {
+    if (!st.link)
+      {
+        return;
+      }
+    if (applied_speed == st.speed_mbps
+        && applied_full_duplex == st.full_duplex)
+      {
+        return;
+      }
+    u32 c = r (MAC_CONFIG) & ~(MAC_CONFIG_FES | MAC_CONFIG_DM);
+    if (st.speed_mbps == 1000)
+      {
+        c |= MAC_CONFIG_FES;
+      }
+    if (st.full_duplex)
+      {
+        c |= MAC_CONFIG_DM;
+      }
+    r (MAC_CONFIG) = c;
+    applied_speed = st.speed_mbps;
+    applied_full_duplex = st.full_duplex;
   }
 
   bool
@@ -793,6 +831,7 @@ namespace gmac
     if (st.link)
       {
         read_speed ();
+        apply_speed ();
       }
     return st.link;
   }

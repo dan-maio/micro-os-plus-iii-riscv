@@ -2,9 +2,10 @@
 
 **Board:** StarFive VisionFive 2 Lite (JH-7110S, four SiFive U74 RV64GC, up to 1.25 GHz)
 **Test:** `test/visionfive2-lite/smp-test-usb-cdc-net`
-**State:** **works on hardware** — carrier at 1 Gb/s, DHCP lease, ICMP echo replies
-(measured: 4/4 and 20/20 with no retransmissions), USB CDC console, PASS.  Section 6
-records the measurements and the four bugs that had to be fixed to get there.
+**State:** **works on hardware** — carrier at 1 Gb/s, DHCP lease (and a static
+address option), ICMP echo replies (4/4, 0 retransmissions), USB CDC console, PASS.
+Section 6 records the measurements and the five bugs that had to be fixed to get
+there.
 
 ---
 
@@ -134,7 +135,7 @@ Linux's `dwmac4_core.c`: **PA in 25:21, GR in 20:16, CSR divider in 11:8**.  (Ge
 that wrong is silent: the MAC still completes the frame, it just talks to a different
 PHY address.)
 
-### 6.2 The TX clock parent: the real cause of the packet loss
+### 6.2 The TX clock parent: the cause of the *partial* loss
 
 `gmac0_tx` (AONCRG + 0x14, mux bits 25:24) was on parent 0, the SoC's generated
 125 MHz `gtxclk`.  The Lite's device tree assigns **parent 1, `gmac0_rmii_rtx`**,
@@ -144,7 +145,22 @@ passed *some* frames (DHCP sometimes, ICMP 25–50 %), which is exactly what an
 unsynchronised transmit clock looks like: no error counters anywhere, just loss.  With
 parent 1: 20/20 echoes, 0 retransmissions.
 
-### 6.3 Thread creation: a higher-priority creator starves itself
+### 6.3 The MAC speed/duplex latch: why TX could die completely
+
+`start()` reads the PHY once and latches `MAC_CONFIG.FES`/`DM` from it.  On a cold
+board the PHY is still negotiating at that moment, so `st.link` is false, the speed
+defaults to 100 Mb/s half duplex, and the MAC keeps that forever -- on a 1 Gb/s link.
+The symptom is brutal and misleading: reception keeps working (the RGMII receive clock
+does not depend on `FES`), the transmit DMA drains every descriptor and reports no
+error, and **not one frame reaches the wire** (measured with a 200-frame broadcast
+burst: the PC's NIC counted none of them).  Register dump of the broken state:
+`MAC_CONFIG = 0x00026003` -- `FES` and `DM` both clear.
+
+The fix is to apply the speed/duplex whenever the link resolves (`apply_speed()` called
+from `link_up()`), not once during bring-up.  With it: 4/4 echoes on both the static
+address and DHCP.
+
+### 6.4 Thread creation: a higher-priority creator starves itself
 
 The main thread runs at `normal`.  Threads created at `above_normal` start at once and
 never yield back, so `os_main` stopped halfway through the list — with no trap and no
@@ -153,7 +169,7 @@ error, just a log that ended mid-sentence.  The fix is to hold the creator at
 thread also had to `sleep_for(1)` instead of `yield()`: a ready `above_normal` thread
 that only yields is a permanent starvation of everything below it.
 
-### 6.4 One console writer
+### 6.5 One console writer
 
 The test's own `log()` wrote to UART0 with a mutex of its own, so its lines never
 reached the RAM/USB log, and two writers interleaved on the serial port.  Every line
