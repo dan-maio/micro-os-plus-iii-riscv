@@ -38,7 +38,7 @@ extern "C"
   void __attribute__ ((weak)) os_startup_initialize_hardware_early (void);
   void __attribute__ ((weak)) os_startup_initialize_hardware (void);
 
-  // cmsis_device.h declares it for the kernel's __ARM_EABI__ code; on RISC-V
+  // cmsis_device.h declares it for the kernel's bare-metal code; on RISC-V
   // the meaningful clock is the timebase.
   std::uint32_t SystemCoreClock = riscv_board::TIMEBASE_HZ;
 }

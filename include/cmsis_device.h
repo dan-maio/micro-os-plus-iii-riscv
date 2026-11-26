@@ -1,6 +1,6 @@
 /*
- * cmsis_device.h -- the kernel includes <cmsis_device.h> from code compiled
- * under __ARM_EABI__ (src/libc/stdlib/exit.c). A RISC-V hart has no CMSIS
+ * cmsis_device.h -- the kernel includes <cmsis_device.h> from its bare-metal
+ * code (src/libc/stdlib/exit.c). A RISC-V hart has no CMSIS
  * core; this stub gives the few names that code reaches, as the AArch32 and
  * AArch64 ports' stubs do.
  *

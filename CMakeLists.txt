@@ -77,18 +77,13 @@ if (NOT PROJECT_IS_TOP_LEVEL)
   if (NOT TARGET micro-os-plus::riscv)
     # What every image of this port is compiled with, whatever the board.
     #
-    # __ARM_EABI__ is the kernel's name for "embedded, no OS underneath": its
-    # malloc, exit/atexit, _sbrk, C++ runtime hooks, free-store set-up and
-    # trace.cpp compile only under it. The AArch64 port defines it for the
-    # same reason. include/riscv-eabi-compat.h (force-included) covers the one
-    # Arm instruction it lets through; see the comment there.
+    # No __ARM_EABI__: the kernel recognises bare-metal RISC-V from the
+    # compiler's own macros (__riscv without __linux__) and compiles its
+    # embedded code (malloc, exit/atexit, _sbrk, the C++ runtime hooks, the
+    # free-store set-up) for it.
     add_library (micro-os-plus-iii-riscv-common-interface INTERFACE)
     target_include_directories (micro-os-plus-iii-riscv-common-interface
                                 INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-    target_compile_definitions (micro-os-plus-iii-riscv-common-interface
-                                INTERFACE __ARM_EABI__)
-    target_compile_options (micro-os-plus-iii-riscv-common-interface INTERFACE
-      "$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/riscv-eabi-compat.h>")
     target_link_options (micro-os-plus-iii-riscv-common-interface INTERFACE
       # One RAM region holds text and data (the image is loaded into RAM and
       # runs there), so the single LOAD segment is RWX by construction.
@@ -268,15 +263,11 @@ function (uos_riscv_add_port _name _board_dir)
                               "${_board_dir}/include"
                               "${CMAKE_CURRENT_SOURCE_DIR}/include")
   target_sources (${_name}-board-interface INTERFACE ${_bsrc})
-  # __ARM_EABI__ is the kernel's name for "embedded, no OS underneath": its
-  # malloc, exit/atexit, _sbrk, C++ runtime hooks, free-store set-up and
-  # trace.cpp compile only under it. The AArch64 port defines it for the same
-  # reason. include/riscv-eabi-compat.h (force-included) covers the one Arm
-  # instruction it lets through; see the comment there.
-  target_compile_definitions (${_name}-board-interface INTERFACE
-                              ${P_DEFINES} __ARM_EABI__)
-  target_compile_options (${_name}-board-interface INTERFACE ${P_FLAGS}
-    "$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/riscv-eabi-compat.h>")
+  # No __ARM_EABI__: the kernel recognises bare-metal RISC-V from the
+  # compiler's own macros (__riscv without __linux__). This needs a kernel
+  # with that check.
+  target_compile_definitions (${_name}-board-interface INTERFACE ${P_DEFINES})
+  target_compile_options (${_name}-board-interface INTERFACE ${P_FLAGS})
   target_link_options (${_name}-board-interface INTERFACE ${P_FLAGS}
     # One RAM region holds text and data (the image is loaded into DDR and
     # runs there), so the single LOAD segment is RWX by construction.
