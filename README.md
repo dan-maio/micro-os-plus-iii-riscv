@@ -34,7 +34,7 @@ micro-os-plu-iii-smp-riscv-pr-github/       the workspace
     │   ├── port_ctx.hpp                    the trap frame (528 bytes)
     │   ├── riscv-csr.hpp, clint.hpp, mmu.hpp, semihosting.hpp
     │   ├── pfic.hpp                        the QingKe PFIC (RISCV_PFIC boards)
-    │   └── cmsis_device.h, riscv-eabi-compat.h
+    │   └── cmsis_device.h
     ├── src/
     │   ├── startup.S, startup.cpp          reset entry, start-up hooks, init arrays
     │   ├── trap.S, trap.cpp                the single trap entry and dispatcher
@@ -124,9 +124,10 @@ RAM = `C|B|SH`, devices = `SO|SH` (`riscv_board::FLAGS_RAM/_DEV`). The QEMU
 board keeps 0: on a standard Sv39 hart those bits are reserved.
 
 Semihosting is the `slli/ebreak/srai` sequence; without a debugger the trap
-handler skips it (a0 = -1) instead of faulting. The kernel's "embedded" code
-paths are selected with `__ARM_EABI__`, as on AArch64 (see
-`include/riscv-eabi-compat.h`).
+handler skips it (a0 = -1) instead of faulting. The kernel selects its
+bare-metal code from the compiler's own macros (`__riscv` without an OS
+macro: `cmsis-plus/os-bare-metal.h` in the kernel); the port defines no
+`__ARM_EABI__`, so it needs a kernel with that header.
 
 The Sv39 tables are real: the kernel runs in M-mode, where satp does not
 translate its own accesses, so `mmu-test` proves them through MPRV (M-mode
@@ -545,16 +546,31 @@ test/hw.sh <app>                 # one test on the Duo
 test/hw-all.sh [app ...]         # all (or the named) hardware tests in a row
 ```
 
-Under the kernel's harness (`micro-os-plus-iii/tests`, local branch `riscv`):
+### Under the kernel's `tests/` (micro-os-plus-iii-smp2)
+
+In `micro-os-plus-iii-smp2` this port is the submodule
+`riscv/micro-os-plus-iii-riscv`, and, not being the top-level project, it is
+a leaf library like the Arm ports there: `micro-os-plus::riscv` adds no
+kernel and reads no board. The board is the kernel's test platform's
+(`tests/platforms/riscv-<board>/`: board facts, code, linker scripts and
+tests); the QEMU `virt` board is this port's
+(`micro-os-plus::riscv-qemu-virt-board`, `-virt32-board`). Moved so far: the
+Milk-V Duo. From `micro-os-plus-iii/tests` there:
 
 ```bash
-xpm run install  --config riscv-milkv-duo-cmake-gcc-debug
-xpm run prepare  --config riscv-milkv-duo-cmake-gcc-debug
-xpm run build    --config riscv-milkv-duo-cmake-gcc-debug
-xpm run test     --config riscv-milkv-duo-cmake-gcc-debug   # 14 qemu cases
-xpm run test-<app>-hwd --config riscv-milkv-duo-cmake-gcc-debug
-xpm run test-hwd-all  --config riscv-milkv-duo-cmake-gcc-debug   # hw-all.sh
+C=qemu-riscv64-cmake-gcc-debug   # or qemu-riscv32-..., -release
+xpm install --config $C
+xpm run link-deps --config $C    # links this folder into build/$C/xpacks
+xpm run prepare --config $C
+xpm run build   --config $C
+xpm run test    --config $C      # the QEMU virt tests (17)
+
+xpm run build --config riscv-milkv-duo-cmake-gcc-debug   # the Duo's hwd images
+BUILD=build/riscv-milkv-duo-cmake-gcc-debug/platform-bin/port-tests \
+  ../../riscv/micro-os-plus-iii-riscv/test/boards/milkv-duo/hw.sh <app>
 ```
+
+The standalone build above stays for the boards not moved yet.
 
 ### Emulated images
 
