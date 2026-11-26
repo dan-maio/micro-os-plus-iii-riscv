@@ -1,9 +1,11 @@
 # micro-os-plus-iii-riscv
 
 The **RISC-V port of µOS++ III**: RV64 or RV32, with or without an FPU,
-machine mode, one hart or SMP (`OS_NCPU` harts). The fourth
-architecture project beside `micro-os-plus-iii-cortexm`, `-aarch32` and
-`-aarch64`, built and tested the same way.
+machine mode, one hart or SMP (`OS_NCPU` harts). The fifth
+architecture project beside `micro-os-plus-iii-cortexm`, `-aarch32`,
+`-aarch64` and `-posix-arch`, built and tested the same way: a leaf library,
+whose boards and tests are the test platforms of the kernel's `tests/`, in
+[micro-os-plus-iii-smp2](https://github.com/dan-maio/micro-os-plus-iii-smp2).
 
 First board: **Milk-V Duo (64 MB)** -- Sophgo CV1800B, T-Head C906 @ 850 MHz,
 64 MiB DDR2 (RV64GC). Second board: **Raspberry Pi Pico 2** (RP2350) on its
@@ -18,53 +20,49 @@ RV64GC harts + one S7 monitor hart), µOS++ SMP on the four U74 in M-mode
 (CH32V307, one QingKe V4F core, RV32IMAFC, single-precision FPU): no CLINT,
 so the port runs its **PFIC path** there -- the PFIC software interrupt as
 PendSV, SysTick as the tick, the PFIC threshold as BASEPRI, nested
-interrupts; see *WCH CH32V307V-EVT-R1*.
+interrupts; see *WCH CH32V307V-EVT-R1*. Sixth: **MangoPi MQ-Pro** (Allwinner
+D1, one C906), loaded over USB FEL with `xfel`.
+
+**Where the boards are.** This repository holds the port only. Each board
+and its tests are a platform of `micro-os-plus-iii-smp2`'s
+`micro-os-plus-iii/tests/` (since 2026-11-26), and the sections below that
+cite this repository's former `test/` read as:
+
+| Former path here | Now, in `micro-os-plus-iii/tests/` |
+|---|---|
+| `test/boards/<board>/` (board.cmake, linker scripts, include/, src/, usb/, ...) | `platforms/riscv-<board>/` (`cmake/board.cmake`, `device/linker-scripts/`, ...) |
+| `test/<board>/<test>/`, `tests.cmake` | `platforms/riscv-<board>/tests/` |
+| `test/CMakeLists.txt` (the builder) | `board-tests/CMakeLists.txt` |
+| `test/qemu.sh` | the platforms `qemu-riscv64`, `qemu-riscv32` (CTest runs QEMU) |
+| `test/boards/<board>/hw.sh`, `hw-all.sh` | the platform's `hwd` CTest cases (OpenOCD, or `xfel`, from CTest) |
+| `test/boards/pico2/usb-host.py` | `platforms/riscv-pico2/usb-host.py` |
+| `test/third_party/lwip` | `third_party/lwip` |
+| the VisionFive 2 files at the root here (`jh7110_*.cfg`, `*.gdb`, `vf2-*.sh`, notes) | `platforms/riscv-visionfive2-lite/` (notes in `docs/`) |
 
 ## Layout
 
 ```text
-micro-os-plu-iii-smp-riscv-pr-github/       the workspace
-├── micro-os-plus-iii/                      the kernel (sibling clone)
-└── micro-os-plus-iii-riscv/                this port
-    ├── CMakeLists.txt                      micro-os-plus::riscv, ::riscv-bare,
-    │                                       ::riscv-qemu-virt, ::riscv-qemu-virt32
-    ├── cmake/toolchains/riscv-none-elf.cmake
-    ├── include/                            the port contract + ISA headers
-    │   ├── cmsis-plus/rtos/port/           os-c-decls.h, os-decls.h, os-inlines.h
-    │   ├── port_ctx.hpp                    the trap frame (528 bytes)
-    │   ├── riscv-csr.hpp, clint.hpp, mmu.hpp, semihosting.hpp
-    │   ├── pfic.hpp                        the QingKe PFIC (RISCV_PFIC boards)
-    │   └── cmsis_device.h
-    ├── src/
-    │   ├── startup.S, startup.cpp          reset entry, start-up hooks, init arrays
-    │   ├── trap.S, trap.cpp                the single trap entry and dispatcher
-    │   ├── rtos/os-core.cpp                the scheduler's port half
-    │   ├── soft-irq.cpp                    software IRQ lines (the "NVIC")
-    │   ├── mmu.cpp                         Sv39 identity map
-    │   ├── trace.cpp, syscalls.c, syscalls-time.cpp, semihosting-exit.cpp
-    ├── qemu/virt/                          the QEMU `virt` stand-in board
-    ├── scripts/make-pdf.sh                 Markdown -> PDF (pandoc + weasyprint)
-    └── test/
-        ├── CMakeLists.txt                  the shared test builder (as cortexm/aarch*)
-        ├── qemu.sh, hw.sh, hw-all.sh       dispatchers -> boards/<board>/
-        ├── boards/milkv-duo/               board.cmake, linker.ld, openocd.cfg,
-        │                                   qemu.sh, hw.sh, hw-all.sh,
-        │                                   hw-reset.sh + reset.cfg,
-        │                                   wait-power-cycle.sh, include/, src/, usb/
-        ├── boards/pico2/                   the RP2350 sources (both RP2350 boards)
-        ├── boards/pico2-rp2350b-psram/     board.cmake (includes pico2's),
-        │                                   linker.ld (16 MB), linker-psram.ld,
-        │                                   hw.sh, qemu.sh
-        ├── boards/visionfive2-lite/        board.cmake, linker.ld (DDR),
-        │                                   jh7110_daplink.cfg, hw.sh,
-        │                                   include/ (multicore.hpp), src/
-        ├── boards/ch32v307-evt/            board.cmake, linker.ld (flash), hw.sh,
-        │                                   openocd-wch/ (build script, patches),
-        │                                   include/ (ch32v307.hpp), src/
-        ├── milkv-duo/, pico2/,             one directory per test application
-        ├── pico2-rp2350b-psram/
-        ├── visionfive2-lite/
-        └── ch32v307-evt/
+micro-os-plus-iii-riscv/                    this port
+├── CMakeLists.txt                          micro-os-plus::riscv, ::riscv-bare,
+│                                           ::riscv-qemu-virt[32][-board]
+├── include/                                the port contract + ISA headers
+│   ├── cmsis-plus/rtos/port/               os-c-decls.h, os-decls.h, os-inlines.h
+│   ├── port_ctx.hpp                        the trap frame (528 bytes)
+│   ├── riscv-csr.hpp, clint.hpp, mmu.hpp, semihosting.hpp
+│   ├── pfic.hpp                            the QingKe PFIC (RISCV_PFIC boards)
+│   └── cmsis_device.h
+├── src/
+│   ├── startup.S, startup.cpp              reset entry, start-up hooks, init arrays
+│   ├── trap.S, trap.cpp                    the single trap entry and dispatcher
+│   ├── rtos/os-core.cpp                    the scheduler's port half
+│   ├── soft-irq.cpp                        software IRQ lines (the "NVIC")
+│   ├── mmu.cpp                             Sv39 identity map
+│   ├── bare/runtime.cpp                    the kernel-free runtime (riscv-bare)
+│   ├── trace.cpp, syscalls.c, syscalls-time.cpp, semihosting-exit.cpp
+├── qemu/virt/                              the QEMU `virt` board (include/,
+│                                           src/, linker.ld)
+├── docs/                                   arm-vs-riscv, riscv-rtos
+└── scripts/make-pdf.sh                     Markdown -> PDF (pandoc + weasyprint)
 ```
 
 ## The port
@@ -532,30 +530,14 @@ What this OpenOCD does wrong (all measured; hw.sh avoids each):
 
 ## Build and test
 
-Toolchain: xPack `riscv-none-elf-gcc` 15.2.0-1.1 (found under `~/.local/xPacks`).
-
-```bash
-xpm install                      # or have the xPacks installed globally
-xpm run build                    # = cmake -S . -B test/build ... && cmake --build
-xpm run test                     # emulated set: ctest -LE hwd
-xpm run test-hwd                 # every hardware test (test/hw-all.sh)
-xpm run hw-reset                 # watchdog reset over JTAG (see below)
-
-test/qemu.sh <app>               # one test on QEMU virt
-test/hw.sh <app>                 # one test on the Duo
-test/hw-all.sh [app ...]         # all (or the named) hardware tests in a row
-```
-
-### Under the kernel's `tests/` (micro-os-plus-iii-smp2)
-
-In `micro-os-plus-iii-smp2` this port is the submodule
-`riscv/micro-os-plus-iii-riscv`, and, not being the top-level project, it is
-a leaf library like the Arm ports there: `micro-os-plus::riscv` adds no
-kernel and reads no board. The board is the kernel's test platform's
-(`tests/platforms/riscv-<board>/`: board facts, code, linker scripts and
-tests); the QEMU `virt` board is this port's
-(`micro-os-plus::riscv-qemu-virt-board`, `-virt32-board`). Moved so far: the
-Milk-V Duo. From `micro-os-plus-iii/tests` there:
+There is no build here: like the Arm ports, this port is built by its
+consumer. In `micro-os-plus-iii-smp2` it is the submodule
+`riscv/micro-os-plus-iii-riscv`, linked into each configuration's build
+folder by `xpm run link-deps`; the boards are the platforms
+`tests/platforms/riscv-<board>/` and the QEMU `virt` machine the platforms
+`qemu-riscv64` and `qemu-riscv32` (their board is this port's
+`micro-os-plus::riscv-qemu-virt[32]-board`). From `micro-os-plus-iii/tests`
+there:
 
 ```bash
 C=qemu-riscv64-cmake-gcc-debug   # or qemu-riscv32-..., -release
@@ -565,12 +547,16 @@ xpm run prepare --config $C
 xpm run build   --config $C
 xpm run test    --config $C      # the QEMU virt tests (17)
 
-xpm run build --config riscv-milkv-duo-cmake-gcc-debug   # the Duo's hwd images
-BUILD=build/riscv-milkv-duo-cmake-gcc-debug/platform-bin/port-tests \
-  ../../riscv/micro-os-plus-iii-riscv/test/boards/milkv-duo/hw.sh <app>
+C=riscv-pico2-cmake-gcc-debug    # a board: riscv-milkv-duo, riscv-pico2,
+                                 # riscv-pico2-rp2350b-psram,
+                                 # riscv-visionfive2-lite, riscv-mangopi-mq-pro,
+                                 # riscv-ch32v307-evt
+xpm run build    --config $C
+xpm run test-hwd --config $C     # the board's hardware tests (ctest -L hwd)
 ```
 
-The standalone build above stays for the boards not moved yet.
+How each board must be ready (booted, at the U-Boot prompt, in FEL, ...) and
+which OpenOCD it needs: `micro-os-plus-iii/docs/tests/COMMANDS.md`.
 
 ### Emulated images
 
