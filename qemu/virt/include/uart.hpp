@@ -38,4 +38,26 @@ namespace uart
 
   void
   write (const char* s, std::size_t n);
+
+  // The virt console is the UART alone (no semihosting copy).
+  inline void
+  write_uart_only (const char* s)
+  {
+    write (s);
+  }
+
+  // The console as the common end of a portable test names it
+  // (tests/board-tests/portable-test-end.cpp, the AArch boards' uart1):
+  // uart1.puts_uart() writes to the UART only. The verdict reaches
+  // semihosting separately (semihosting::report_result).
+  struct console
+  {
+    void
+    puts_uart (const char* s) const
+    {
+      write_uart_only (s);
+    }
+  };
+
+  inline constexpr console uart1{};
 } // namespace uart

@@ -34,6 +34,139 @@ project (micro-os-plus-iii-riscv LANGUAGES C CXX ASM)
 set (UOS_RISCV_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "")
 
 # -----------------------------------------------------------------------------
+# Under the kernel's tests/ (micro-os-plus-iii-smp2): a leaf library.
+#
+# Like every µOS++ port there, this port then adds no kernel and reads no
+# board. The consumer (the tests, an application) adds the kernel; the board
+# -- its facts, flags, start-up support and linker scripts -- is the
+# consumer's too: the test platform tests/platforms/riscv-<board>/ builds a
+# `micro-os-plus::board` target and links it with this one. The targets below
+# name kernel targets, which CMake resolves when it generates, so the kernel
+# may be added after the port.
+#
+# Exports:
+#   micro-os-plus::riscv            the ISA half (start-up, trap entry, the
+#                                   scheduler port), linked with a board
+#   micro-os-plus::riscv-bare       start-up, trap entry and a kernel-free
+#                                   runtime (the tests that compile no kernel)
+#   micro-os-plus::riscv-qemu-virt  micro-os-plus::riscv on QEMU's virt
+#                                   machine (RV64GC): the stand-in that
+#                                   replaces a board QEMU does not model
+#   micro-os-plus::riscv-qemu-virt32  the same as an RV32 hart without an FPU
+#
+# Built as the top-level project, the port keeps its standalone layout
+# (below): it adds the kernel beside it, reads test/boards/<BOARD>/ and builds
+# test/<BOARD>/. The boards that have moved to the kernel's tests/platforms/
+# are built from there.
+if (NOT PROJECT_IS_TOP_LEVEL)
+  # The ISA half: the same on every board.
+  set (_uos_riscv_port_sources
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/startup.S"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/trap.S"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/trap.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/startup.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/trace.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/syscalls.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/syscalls-time.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/mmu.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/soft-irq.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/semihosting-exit.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/rtos/os-core.cpp"
+  )
+
+  if (NOT TARGET micro-os-plus::riscv)
+    # What every image of this port is compiled with, whatever the board.
+    #
+    # __ARM_EABI__ is the kernel's name for "embedded, no OS underneath": its
+    # malloc, exit/atexit, _sbrk, C++ runtime hooks, free-store set-up and
+    # trace.cpp compile only under it. The AArch64 port defines it for the
+    # same reason. include/riscv-eabi-compat.h (force-included) covers the one
+    # Arm instruction it lets through; see the comment there.
+    add_library (micro-os-plus-iii-riscv-common-interface INTERFACE)
+    target_include_directories (micro-os-plus-iii-riscv-common-interface
+                                INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_compile_definitions (micro-os-plus-iii-riscv-common-interface
+                                INTERFACE __ARM_EABI__)
+    target_compile_options (micro-os-plus-iii-riscv-common-interface INTERFACE
+      "$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/riscv-eabi-compat.h>")
+    target_link_options (micro-os-plus-iii-riscv-common-interface INTERFACE
+      # One RAM region holds text and data (the image is loaded into RAM and
+      # runs there), so the single LOAD segment is RWX by construction.
+      "LINKER:--no-warn-rwx-segments")
+
+    # The port: the ISA half, on the kernel, with the test support
+    # (hw_result.hpp and the compile-time board contract, board-contract.cpp).
+    add_library (micro-os-plus-iii-riscv-interface INTERFACE)
+    target_sources (micro-os-plus-iii-riscv-interface INTERFACE
+                    ${_uos_riscv_port_sources})
+    target_link_libraries (micro-os-plus-iii-riscv-interface INTERFACE
+      micro-os-plus-iii-riscv-common-interface
+      micro-os-plus::iii-core
+      micro-os-plus::test-support)
+    add_library (micro-os-plus::riscv ALIAS micro-os-plus-iii-riscv-interface)
+
+    # Without the kernel: the start-up, the trap entry and a kernel-free
+    # runtime (src/bare/runtime.cpp); the test support headers (hw_result.hpp)
+    # but not its board contract, which is about OS_NCPU and the scheduler.
+    add_library (micro-os-plus-iii-riscv-bare-interface INTERFACE)
+    target_sources (micro-os-plus-iii-riscv-bare-interface INTERFACE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/startup.S"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/trap.S"
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/bare/runtime.cpp")
+    target_link_libraries (micro-os-plus-iii-riscv-bare-interface INTERFACE
+      micro-os-plus-iii-riscv-common-interface)
+    target_include_directories (micro-os-plus-iii-riscv-bare-interface INTERFACE
+      "$<TARGET_PROPERTY:micro-os-plus-iii-test-support-interface,INTERFACE_INCLUDE_DIRECTORIES>")
+    add_library (micro-os-plus::riscv-bare ALIAS micro-os-plus-iii-riscv-bare-interface)
+
+    # QEMU's virt machine, the port's own generic target: its board code
+    # (qemu/virt/: a virt CLINT, an NS16550 console, a virtual LED) and its
+    # linker script, with the port. A test platform whose silicon QEMU does
+    # not model links this in place of the port and its board for the `qemu`
+    # images (board_test_qemu_libs).
+    function (uos_riscv_add_qemu_virt _name)
+      cmake_parse_arguments (V "" "" "FLAGS;LINK_FLAGS;DEFINES" ${ARGN})
+      set (_virt "${CMAKE_CURRENT_SOURCE_DIR}/qemu/virt")
+      file (GLOB _vsrc CONFIGURE_DEPENDS "${_virt}/src/*.cpp")
+      add_library (${_name}-board-interface INTERFACE)
+      target_include_directories (${_name}-board-interface INTERFACE "${_virt}/include")
+      target_sources (${_name}-board-interface INTERFACE ${_vsrc})
+      target_compile_definitions (${_name}-board-interface INTERFACE ${V_DEFINES})
+      target_compile_options (${_name}-board-interface INTERFACE ${V_FLAGS})
+      # Link-only flags after FLAGS: the last -march chooses the multilib.
+      target_link_options (${_name}-board-interface INTERFACE ${V_FLAGS}
+                           ${V_LINK_FLAGS} "-T${_virt}/linker.ld")
+      add_library (${_name}-interface INTERFACE)
+      target_link_libraries (${_name}-interface INTERFACE
+        micro-os-plus::riscv ${_name}-board-interface)
+    endfunction ()
+
+    # Generic RV64GC, no tuning for a particular core.
+    uos_riscv_add_qemu_virt (micro-os-plus-iii-riscv-qemu-virt
+      FLAGS -march=rv64imafdc_zicsr_zifencei -mabi=lp64d -mcmodel=medany
+      DEFINES SEMIHOST_TRAP_CHOSEN "PORT_GREETING=\"µOS++ QEMU virt (RV64GC)\"")
+    add_library (micro-os-plus::riscv-qemu-virt
+                 ALIAS micro-os-plus-iii-riscv-qemu-virt-interface)
+
+    # An RV32 hart without an FPU, compiled exactly as the RP2350's Hazard3
+    # cores are (the pico-sdk's -march); linked with the libraries with M.
+    uos_riscv_add_qemu_virt (micro-os-plus-iii-riscv-qemu-virt32
+      FLAGS -march=rv32ima_zicsr_zifencei_zba_zbb_zbs_zbkb_zca_zcb_zcmp
+            -mabi=ilp32 -mcmodel=medany
+      LINK_FLAGS -march=rv32imc_zicsr_zifencei
+      DEFINES SEMIHOST_TRAP_CHOSEN
+              "PORT_GREETING=\"µOS++ QEMU virt (RV32IMAC, Hazard3 code)\"")
+    add_library (micro-os-plus::riscv-qemu-virt32
+                 ALIAS micro-os-plus-iii-riscv-qemu-virt32-interface)
+
+    message (STATUS "µOS++ IIIe riscv port: micro-os-plus::riscv")
+  endif ()
+  return ()
+endif ()
+
+# -----------------------------------------------------------------------------
+# Standalone (top-level) build.
+#
 # The kernel: a sibling clone.
 get_filename_component (_uos_siblings "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
