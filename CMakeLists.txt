@@ -114,11 +114,15 @@ if (NOT PROJECT_IS_TOP_LEVEL)
       "$<TARGET_PROPERTY:micro-os-plus-iii-test-support-interface,INTERFACE_INCLUDE_DIRECTORIES>")
     add_library (micro-os-plus::riscv-bare ALIAS micro-os-plus-iii-riscv-bare-interface)
 
-    # QEMU's virt machine, the port's own generic target: its board code
-    # (qemu/virt/: a virt CLINT, an NS16550 console, a virtual LED) and its
-    # linker script, with the port. A test platform whose silicon QEMU does
-    # not model links this in place of the port and its board for the `qemu`
-    # images (board_test_qemu_libs).
+    # QEMU's virt machine, the port's own generic target, in two forms:
+    #
+    #   micro-os-plus::riscv-qemu-virt[32]-board  the board alone (qemu/virt/:
+    #       a virt CLINT, an NS16550 console, a virtual LED; its flags), for a
+    #       platform that IS the virt machine (tests/platforms/qemu-riscv64,
+    #       qemu-riscv32), which names qemu/virt/linker.ld itself;
+    #   micro-os-plus::riscv-qemu-virt[32]  that board with the port and the
+    #       linker script, for a platform whose silicon QEMU does not model and
+    #       whose `qemu` images replace the port and the board with it.
     function (uos_riscv_add_qemu_virt _name)
       cmake_parse_arguments (V "" "" "FLAGS;LINK_FLAGS;DEFINES" ${ARGN})
       set (_virt "${CMAKE_CURRENT_SOURCE_DIR}/qemu/virt")
@@ -130,10 +134,11 @@ if (NOT PROJECT_IS_TOP_LEVEL)
       target_compile_options (${_name}-board-interface INTERFACE ${V_FLAGS})
       # Link-only flags after FLAGS: the last -march chooses the multilib.
       target_link_options (${_name}-board-interface INTERFACE ${V_FLAGS}
-                           ${V_LINK_FLAGS} "-T${_virt}/linker.ld")
+                           ${V_LINK_FLAGS})
       add_library (${_name}-interface INTERFACE)
       target_link_libraries (${_name}-interface INTERFACE
         micro-os-plus::riscv ${_name}-board-interface)
+      target_link_options (${_name}-interface INTERFACE "-T${_virt}/linker.ld")
     endfunction ()
 
     # Generic RV64GC, no tuning for a particular core.
@@ -142,6 +147,8 @@ if (NOT PROJECT_IS_TOP_LEVEL)
       DEFINES SEMIHOST_TRAP_CHOSEN "PORT_GREETING=\"µOS++ QEMU virt (RV64GC)\"")
     add_library (micro-os-plus::riscv-qemu-virt
                  ALIAS micro-os-plus-iii-riscv-qemu-virt-interface)
+    add_library (micro-os-plus::riscv-qemu-virt-board
+                 ALIAS micro-os-plus-iii-riscv-qemu-virt-board-interface)
 
     # An RV32 hart without an FPU, compiled exactly as the RP2350's Hazard3
     # cores are (the pico-sdk's -march); linked with the libraries with M.
@@ -153,6 +160,8 @@ if (NOT PROJECT_IS_TOP_LEVEL)
               "PORT_GREETING=\"µOS++ QEMU virt (RV32IMAC, Hazard3 code)\"")
     add_library (micro-os-plus::riscv-qemu-virt32
                  ALIAS micro-os-plus-iii-riscv-qemu-virt32-interface)
+    add_library (micro-os-plus::riscv-qemu-virt32-board
+                 ALIAS micro-os-plus-iii-riscv-qemu-virt32-board-interface)
 
     message (STATUS "µOS++ IIIe riscv port: micro-os-plus::riscv")
   endif ()
